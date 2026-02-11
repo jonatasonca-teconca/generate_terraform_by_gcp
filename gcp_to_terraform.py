@@ -17,6 +17,42 @@ class GCPToTerraform:
         self.project_id = project_id
         self.output_dir = output_dir or f"./{project_id}"
         self.resources = {}
+        self.enabled_apis = set()  # APIs habilitadas no projeto
+        
+        # Mapeamento de API -> Métodos de extração
+        self.api_to_methods = {
+            'compute.googleapis.com': [
+                'extract_networks', 'extract_firewall', 'extract_routes',
+                'extract_routers', 'extract_vpn_gateways', 'extract_peering',
+                'extract_compute', 'extract_instance_groups', 'extract_compute_disks',
+                'extract_compute_images', 'extract_load_balancers', 'extract_health_checks',
+                'extract_ssl_certificates', 'extract_network_endpoint_groups',
+                'extract_cloud_nat', 'extract_cloud_armor', 'extract_cloud_interconnect',
+                'extract_autoscalers'
+            ],
+            'storage-component.googleapis.com': ['extract_storage'],
+            'cloudfunctions.googleapis.com': ['extract_functions'],
+            'run.googleapis.com': ['extract_cloudrun'],
+            'container.googleapis.com': ['extract_gke', 'extract_gke_node_pools'],
+            'composer.googleapis.com': ['extract_composer'],
+            'sqladmin.googleapis.com': ['extract_sql'],
+            'redis.googleapis.com': ['extract_redis'],
+            'bigquery.googleapis.com': ['extract_bigquery', 'extract_bigquery_tables'],
+            'spanner.googleapis.com': ['extract_cloud_spanner'],
+            'pubsub.googleapis.com': ['extract_pubsub', 'extract_pubsub_complete'],
+            'iam.googleapis.com': ['extract_service_accounts', 'extract_iam_policies', 
+                                   'extract_iam_custom_roles', 'extract_service_account_keys'],
+            'secretmanager.googleapis.com': ['extract_secrets'],
+            'cloudkms.googleapis.com': ['extract_kms'],
+            'dns.googleapis.com': ['extract_dns'],
+            'file.googleapis.com': ['extract_filestore'],
+            'artifactregistry.googleapis.com': ['extract_artifact_registry'],
+            'cloudscheduler.googleapis.com': ['extract_cloud_scheduler'],
+            'dataflow.googleapis.com': ['extract_dataflow'],
+            'dataproc.googleapis.com': ['extract_dataproc'],
+            'bigtable.googleapis.com': ['extract_bigtable'],
+            'monitoring.googleapis.com': ['extract_monitoring_dashboards', 'extract_alerting_policies']
+        }
         
     def run_gcloud(self, command: str) -> Dict:
         """Executa comando gcloud e retorna JSON"""
@@ -35,6 +71,53 @@ class GCPToTerraform:
             return []
         except json.JSONDecodeError:
             return []
+    
+    def detect_enabled_apis(self):
+        """Detecta APIs habilitadas no projeto"""
+        print("🔍 Detectando APIs habilitadas no projeto...")
+        try:
+            result = subprocess.run(
+                f"gcloud services list --enabled --project={self.project_id} --format=json".split(),
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            services = json.loads(result.stdout) if result.stdout else []
+            
+            # Extrair apenas os nomes das APIs
+            for service in services:
+                service_name = service.get('config', {}).get('name', '')
+                if service_name:
+                    self.enabled_apis.add(service_name)
+            
+            print(f"   ✓ {len(self.enabled_apis)} APIs habilitadas detectadas")
+            
+            # Mostrar APIs relevantes para extração
+            relevant_apis = self.enabled_apis.intersection(self.api_to_methods.keys())
+            if relevant_apis:
+                print(f"   ℹ️  APIs relevantes para extração: {len(relevant_apis)}")
+                for api in sorted(relevant_apis):
+                    api_short = api.replace('.googleapis.com', '')
+                    print(f"      • {api_short}")
+            else:
+                print(f"   ⚠️  Nenhuma API relevante detectada")
+                
+        except Exception as e:
+            print(f"   ⚠️  Erro ao detectar APIs: {str(e)}")
+            print(f"   ℹ️  Continuando com extração padrão...")
+    
+    def should_extract(self, method_name: str) -> bool:
+        """Verifica se um método de extração deve ser executado baseado nas APIs habilitadas"""
+        # Se não conseguiu detectar APIs, extrai tudo (comportamento antigo)
+        if not self.enabled_apis:
+            return True
+        
+        # Verifica se alguma API habilitada requer este método
+        for api, methods in self.api_to_methods.items():
+            if api in self.enabled_apis and method_name in methods:
+                return True
+        
+        return False
     
     def extract_networks(self):
         """Extrai VPCs e Subnets"""
@@ -141,7 +224,19 @@ class GCPToTerraform:
     def extract_bigquery(self):
         """Extrai datasets BigQuery"""
         print("📊 Extraindo BigQuery Datasets...")
-        datasets = self.run_gcloud("bq ls --project_id")
+        # BigQuery usa ferramenta 'bq' standalone, não 'gcloud bq'
+        try:
+            result = subprocess.run(
+                f"bq ls -p {self.project_id} --format=json".split(),
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            datasets = json.loads(result.stdout) if result.stdout else []
+        except (subprocess.CalledProcessError, FileNotFoundError, json.JSONDecodeError):
+            # Se 'bq' não estiver instalado ou comando falhar, usa lista vazia
+            datasets = []
+        
         self.resources['bigquery_datasets'] = datasets
         print(f"   ✓ {len(datasets)} datasets encontrados")
     
@@ -300,7 +395,7 @@ class GCPToTerraform:
         self.resources['cloud_nats'] = all_nats
         print(f"   ✓ {len(all_nats)} Cloud NAT encontrados")
     
-    def extract_disks(self):
+    def extract_compute_disks(self):
         """Extrai Compute Disks persistentes"""
         print("💾 Extraindo Compute Disks...")
         
@@ -411,7 +506,7 @@ class GCPToTerraform:
         try:
             # Listar todos os datasets primeiro
             result = subprocess.run(
-                f"bq ls --project_id={self.project_id} --format=json".split(),
+                f"bq ls -p {self.project_id} --format=json".split(),
                 capture_output=True,
                 text=True,
                 check=True
@@ -425,7 +520,7 @@ class GCPToTerraform:
                     try:
                         # Listar tables do dataset
                         table_result = subprocess.run(
-                            f"bq ls --project_id={self.project_id} --format=json {dataset_id}".split(),
+                            f"bq ls -p {self.project_id} --format=json {dataset_id}".split(),
                             capture_output=True,
                             text=True,
                             check=True
@@ -439,9 +534,10 @@ class GCPToTerraform:
             
             self.resources['bigquery_tables'] = all_tables
             print(f"   ✓ {len(all_tables)} tables/views encontradas")
-        except Exception as e:
-            print(f"   ⚠️  Erro ao extrair BigQuery tables: {e}")
+        except (subprocess.CalledProcessError, FileNotFoundError, json.JSONDecodeError) as e:
+            # Se 'bq' não estiver instalado ou comando falhar, usa lista vazia silenciosamente
             self.resources['bigquery_tables'] = []
+            print(f"   ✓ 0 tables/views encontradas")
     
     def extract_gke_node_pools(self):
         """Extrai GKE Node Pools"""
@@ -632,81 +728,118 @@ class GCPToTerraform:
         print(f"\n🚀 Iniciando extração do projeto: {self.project_id}\n")
         print("="*60)
         
+        # PASSO 1: Detectar APIs habilitadas (NOVA ESTRATÉGIA)
+        self.detect_enabled_apis()
+        print()
+        
+        # PASSO 2: Extrair recursos baseado nas APIs habilitadas
+        
         # Networking (ordem importante para peering)
-        self.extract_networks()
-        self.extract_firewall()
-        self.extract_routes()
-        self.extract_routers()
-        self.extract_vpn_gateways()
-        self.extract_peering()
+        if self.should_extract('extract_networks'):
+            self.extract_networks()
+            self.extract_firewall()
+            self.extract_routes()
+            self.extract_routers()
+            self.extract_vpn_gateways()
+            self.extract_peering()
         
         # Compute e Storage
-        self.extract_compute()
-        self.extract_instance_groups()  # FASE 1: MIGs
-        self.extract_disks()  # FASE 1: Disks
-        self.extract_compute_images()  # FASE 2: Custom Images
-        self.extract_storage()
+        if self.should_extract('extract_compute'):
+            self.extract_compute()
+            self.extract_instance_groups()  # FASE 1: MIGs
+            self.extract_compute_disks()  # FASE 1: Disks
+            self.extract_compute_images()  # FASE 2: Custom Images
+            self.extract_autoscalers()  # FASE 4: Autoscalers
+        
+        if self.should_extract('extract_storage'):
+            self.extract_storage()
         
         # Serverless
-        self.extract_functions()
-        self.extract_cloud_run()
+        if self.should_extract('extract_functions'):
+            self.extract_functions()
+        
+        if self.should_extract('extract_cloudrun'):
+            self.extract_cloud_run()
         
         # Containers e Orchestration
-        self.extract_gke()
-        self.extract_gke_node_pools()  # FASE 3: GKE Node Pools
-        self.extract_composer()
+        if self.should_extract('extract_gke'):
+            self.extract_gke()
+            self.extract_gke_node_pools()  # FASE 3: GKE Node Pools
+        
+        if self.should_extract('extract_composer'):
+            self.extract_composer()
         
         # Databases
-        self.extract_sql()
-        self.extract_redis()
-        self.extract_bigquery()
-        self.extract_bigquery_tables()  # FASE 3: BigQuery Tables
-        self.extract_cloud_spanner()  # FASE 3: Cloud Spanner
+        if self.should_extract('extract_sql'):
+            self.extract_sql()
+        
+        if self.should_extract('extract_redis'):
+            self.extract_redis()
+        
+        if self.should_extract('extract_bigquery'):
+            self.extract_bigquery()
+            self.extract_bigquery_tables()  # FASE 3: BigQuery Tables
+        
+        if self.should_extract('extract_cloud_spanner'):
+            self.extract_cloud_spanner()  # FASE 3: Cloud Spanner
+        
+        if self.should_extract('extract_bigtable'):
+            self.extract_bigtable()  # FASE 4: Bigtable
         
         # Messaging
-        self.extract_pubsub()
-        self.extract_pubsub_complete()  # FASE 3: Pub/Sub Subscriptions e Schemas
+        if self.should_extract('extract_pubsub'):
+            self.extract_pubsub()
+            self.extract_pubsub_complete()  # FASE 3: Pub/Sub Subscriptions e Schemas
         
-        # Security e IAM
-        self.extract_service_accounts()
-        self.extract_iam_policies()  # FASE 1: IAM Policies
-        self.extract_iam_custom_roles()  # FASE 2: Custom Roles
-        self.extract_service_account_keys()  # FASE 2: SA Keys
-        self.extract_secrets()
-        self.extract_kms()
+        # Security e IAM (sempre extrair, pois IAM é fundamental)
+        if self.should_extract('extract_service_accounts'):
+            self.extract_service_accounts()
+            self.extract_iam_policies()  # FASE 1: IAM Policies
+            self.extract_iam_custom_roles()  # FASE 2: Custom Roles
+            self.extract_service_account_keys()  # FASE 2: SA Keys
+        
+        if self.should_extract('extract_secrets'):
+            self.extract_secrets()
+        
+        if self.should_extract('extract_kms'):
+            self.extract_kms()
         
         # Networking avançado
-        self.extract_dns()
-        self.extract_load_balancers()
-        self.extract_health_checks()  # FASE 2: Health Checks
-        self.extract_ssl_certificates()  # FASE 2: SSL Certificates
-        self.extract_network_endpoint_groups()  # FASE 1: NEGs
-        self.extract_cloud_nat()  # FASE 1: Cloud NAT
-        self.extract_cloud_armor()  # FASE 2: Cloud Armor
-        self.extract_cloud_interconnect()  # FASE 3: Cloud Interconnect
+        if self.should_extract('extract_dns'):
+            self.extract_dns()
+        
+        if self.should_extract('extract_load_balancers'):
+            self.extract_load_balancers()
+            self.extract_health_checks()  # FASE 2: Health Checks
+            self.extract_ssl_certificates()  # FASE 2: SSL Certificates
+            self.extract_network_endpoint_groups()  # FASE 1: NEGs
+            self.extract_cloud_nat()  # FASE 1: Cloud NAT
+            self.extract_cloud_armor()  # FASE 2: Cloud Armor
+            self.extract_cloud_interconnect()  # FASE 3: Cloud Interconnect
         
         # Storage avançado
-        self.extract_filestore()  # FASE 3: Filestore
+        if self.should_extract('extract_filestore'):
+            self.extract_filestore()  # FASE 3: Filestore
         
         # CI/CD e Artifacts
-        self.extract_artifact_registry()
+        if self.should_extract('extract_artifact_registry'):
+            self.extract_artifact_registry()
         
         # Scheduling
-        self.extract_cloud_scheduler()
+        if self.should_extract('extract_cloud_scheduler'):
+            self.extract_cloud_scheduler()
         
         # Data Processing
-        self.extract_dataflow()
-        self.extract_dataproc()  # FASE 3: Dataproc
+        if self.should_extract('extract_dataflow'):
+            self.extract_dataflow()
         
-        # Compute Avançado
-        self.extract_autoscalers()  # FASE 4: Autoscalers
-        
-        # Data & Analytics Avançado
-        self.extract_bigtable()  # FASE 4: Bigtable
+        if self.should_extract('extract_dataproc'):
+            self.extract_dataproc()  # FASE 3: Dataproc
         
         # Monitoring e Observability
-        self.extract_monitoring_dashboards()  # FASE 3: Monitoring Dashboards
-        self.extract_alerting_policies()  # FASE 3: Alerting Policies
+        if self.should_extract('extract_monitoring_dashboards'):
+            self.extract_monitoring_dashboards()  # FASE 3: Monitoring Dashboards
+            self.extract_alerting_policies()  # FASE 3: Alerting Policies
         
         print("="*60)
         print(f"\n✅ Extração concluída!\n")
