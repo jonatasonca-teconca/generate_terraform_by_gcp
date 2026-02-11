@@ -17,6 +17,7 @@ RESOURCES ?= all
 # VARIÁVEIS E CAMINHOS
 # ============================================================
 SCRIPT := gcp_to_terraform.py
+ORG_SCRIPT := gcp_org_to_terraform.py
 PYTHON := python3
 TERRAFORM := terraform
 
@@ -37,19 +38,22 @@ help: ## Mostra esta mensagem de ajuda
 	@echo "$(BLUE)  Makefile - Extração GCP para Terraform$(NC)"
 	@echo "$(BLUE)═══════════════════════════════════════════════════════════$(NC)"
 	@echo ""
+	@echo "$(GREEN)Organização:$(NC) $(ORG_ID)"
 	@echo "$(GREEN)Projetos configurados:$(NC)"
 	@echo "  $(PROJECTS)"
 	@echo ""
 	@echo "$(GREEN)Targets disponíveis:$(NC)"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "  $(YELLOW)%-20s$(NC) %s\n", $$1, $$2}'
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  $(YELLOW)%-25s$(NC) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(GREEN)Exemplos de uso:$(NC)"
+	@echo "  $(YELLOW)Organização:$(NC)"
+	@echo "  make extract-org              # Extrai recursos da organização"
+	@echo "  make extract-everything       # Extrai organização + projetos"
+	@echo ""
+	@echo "  $(YELLOW)Projetos:$(NC)"
 	@echo "  make extract-all              # Extrai todos os projetos"
-	@echo "  make extract PROJECT=infra-sd-host"
-	@echo "  make init-all                 # Inicializa Terraform em todos"
-	@echo "  make plan PROJECT=infra-sd-host"
-	@echo "  make clean-all                # Remove arquivos gerados"
+	@echo "  make extract PROJECT=teconca-data-dev"
 	@echo ""
 
 .DEFAULT_GOAL := help
@@ -113,6 +117,41 @@ endif
 	echo "$(BLUE)🚀 Extraindo projeto $(PROJECT) na região $$REGION$(NC)"; \
 	$(PYTHON) $(SCRIPT) $(PROJECT) --region $$REGION
 	@echo "$(GREEN)✅ Projeto extraído com sucesso!$(NC)"
+
+# ============================================================
+# EXTRAÇÃO DE ORGANIZAÇÃO
+# ============================================================
+
+.PHONY: extract-org
+extract-org: ## Extrai recursos da organização (folders, policies, IAM, tags)
+	@echo "$(BLUE)═══════════════════════════════════════════════════════════$(NC)"
+	@echo "$(BLUE)  Extraindo Organização: $(ORG_ID)$(NC)"
+	@echo "$(BLUE)═══════════════════════════════════════════════════════════$(NC)"
+	@$(PYTHON) $(ORG_SCRIPT) $(ORG_ID)
+	@echo "$(GREEN)✅ Organização extraída com sucesso!$(NC)"
+
+.PHONY: extract-everything
+extract-everything: extract-org extract-all ## Extrai TUDO: organização + todos os projetos
+	@echo ""
+	@echo "$(GREEN)✅ Extração completa concluída!$(NC)"
+	@echo "$(BLUE)📊 Estrutura extraída:$(NC)"
+	@echo "  • Organização: org-$(ORG_ID)/"
+	@$(foreach proj,$(PROJECTS), \
+		echo "  • Projeto: $(proj)/"; \
+	)
+	@echo ""
+
+.PHONY: init-org
+init-org: ## Inicializa Terraform na organização
+	@if [ -d "org-$(ORG_ID)" ]; then \
+		echo "$(BLUE)🔧 Inicializando Terraform em org-$(ORG_ID)$(NC)"; \
+		cd org-$(ORG_ID) && $(TERRAFORM) init; \
+		echo "$(GREEN)✅ Terraform inicializado$(NC)"; \
+	else \
+		echo "$(RED)❌ Diretório org-$(ORG_ID) não encontrado$(NC)"; \
+		echo "$(YELLOW)Execute: make extract-org$(NC)"; \
+		exit 1; \
+	fi
 
 # ============================================================
 # TERRAFORM - OPERAÇÕES
@@ -376,13 +415,14 @@ endif
 # ============================================================
 
 .PHONY: full-setup
-full-setup: extract-all init-all validate-all ## Workflow completo: extrair + inicializar + validar
+full-setup: extract-everything init-org init-all validate-all ## Workflow completo: extrair tudo + inicializar + validar
 	@echo "$(GREEN)✅ Setup completo finalizado!$(NC)"
 	@echo "$(YELLOW)Próximo passo: make plan PROJECT=<nome>$(NC)"
 
 .PHONY: quick-start
-quick-start: check-tools extract-all ## Quick start: verifica ferramentas e extrai tudo
+quick-start: check-tools extract-everything ## Quick start: verifica ferramentas e extrai tudo
 	@echo "$(GREEN)✅ Quick start concluído!$(NC)"
 	@echo "$(YELLOW)Próximos passos:$(NC)"
-	@echo "  1. make init-all"
-	@echo "  2. make plan PROJECT=<nome>"
+	@echo "  1. make init-org"
+	@echo "  2. make init-all"
+	@echo "  3. make plan PROJECT=<nome>"

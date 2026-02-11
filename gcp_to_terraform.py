@@ -152,6 +152,114 @@ class GCPToTerraform:
         self.resources['service_accounts'] = sas
         print(f"   ✓ {len(sas)} service accounts encontradas")
     
+    def extract_cloud_run(self):
+        """Extrai Cloud Run services"""
+        print("🏃 Extraindo Cloud Run...")
+        services = self.run_gcloud("run services list")
+        self.resources['cloud_run_services'] = services
+        print(f"   ✓ {len(services)} services encontrados")
+    
+    def extract_cloud_scheduler(self):
+        """Extrai Cloud Scheduler jobs"""
+        print("⏰ Extraindo Cloud Scheduler...")
+        jobs = self.run_gcloud("scheduler jobs list")
+        self.resources['scheduler_jobs'] = jobs
+        print(f"   ✓ {len(jobs)} jobs encontrados")
+    
+    def extract_secrets(self):
+        """Extrai Secret Manager secrets"""
+        print("🔒 Extraindo Secret Manager...")
+        secrets = self.run_gcloud("secrets list")
+        self.resources['secrets'] = secrets
+        print(f"   ✓ {len(secrets)} secrets encontrados")
+    
+    def extract_kms(self):
+        """Extrai KMS keyrings e keys"""
+        print("🔐 Extraindo KMS...")
+        # KMS requer região/location
+        keyrings = self.run_gcloud("kms keyrings list --location=global")
+        self.resources['kms_keyrings'] = keyrings
+        print(f"   ✓ {len(keyrings)} keyrings encontrados")
+    
+    def extract_dns(self):
+        """Extrai Cloud DNS zones"""
+        print("🌐 Extraindo Cloud DNS...")
+        zones = self.run_gcloud("dns managed-zones list")
+        self.resources['dns_zones'] = zones
+        print(f"   ✓ {len(zones)} DNS zones encontradas")
+    
+    def extract_load_balancers(self):
+        """Extrai Load Balancers"""
+        print("⚖️  Extraindo Load Balancers...")
+        # URL Maps (HTTP(S) LB)
+        url_maps = self.run_gcloud("compute url-maps list")
+        self.resources['url_maps'] = url_maps
+        
+        # Backend Services
+        backends = self.run_gcloud("compute backend-services list")
+        self.resources['backend_services'] = backends
+        
+        # Target Proxies
+        target_https = self.run_gcloud("compute target-https-proxies list")
+        target_http = self.run_gcloud("compute target-http-proxies list")
+        self.resources['target_https_proxies'] = target_https
+        self.resources['target_http_proxies'] = target_http
+        
+        # Forwarding Rules
+        forwarding_rules = self.run_gcloud("compute forwarding-rules list")
+        self.resources['forwarding_rules'] = forwarding_rules
+        
+        print(f"   ✓ {len(url_maps)} URL maps")
+        print(f"   ✓ {len(backends)} backend services")
+        print(f"   ✓ {len(forwarding_rules)} forwarding rules")
+    
+    def extract_redis(self):
+        """Extrai Memorystore Redis instances"""
+        print("🗄️  Extraindo Redis (Memorystore)...")
+        instances = self.run_gcloud("redis instances list")
+        self.resources['redis_instances'] = instances
+        print(f"   ✓ {len(instances)} instâncias Redis encontradas")
+    
+    def extract_artifact_registry(self):
+        """Extrai Artifact Registry repositories"""
+        print("📦 Extraindo Artifact Registry...")
+        repos = self.run_gcloud("artifacts repositories list")
+        self.resources['artifact_repos'] = repos
+        print(f"   ✓ {len(repos)} repositórios encontrados")
+    
+    def extract_composer(self):
+        """Extrai Cloud Composer (Airflow) environments"""
+        print("🎼 Extraindo Cloud Composer...")
+        envs = self.run_gcloud("composer environments list")
+        self.resources['composer_envs'] = envs
+        print(f"   ✓ {len(envs)} environments encontrados")
+    
+    def extract_dataflow(self):
+        """Extrai Dataflow jobs"""
+        print("🌊 Extraindo Dataflow...")
+        jobs = self.run_gcloud("dataflow jobs list")
+        self.resources['dataflow_jobs'] = jobs
+        print(f"   ✓ {len(jobs)} jobs encontrados")
+    
+    def extract_bigquery_extended(self):
+        """Extrai BigQuery de forma mais completa"""
+        print("📊 Extraindo BigQuery (estendido)...")
+        # Datasets já extraídos, vamos adicionar tables
+        datasets = self.resources.get('bigquery_datasets', [])
+        
+        all_tables = []
+        for dataset in datasets[:3]:  # Limitar a 3 datasets para não demorar
+            dataset_id = dataset.get('id', '').split(':')[-1] if dataset.get('id') else ''
+            if dataset_id:
+                try:
+                    tables = self.run_gcloud(f"bq ls --project_id={self.project_id} {dataset_id}")
+                    all_tables.extend(tables)
+                except:
+                    pass
+        
+        self.resources['bigquery_tables'] = all_tables
+        print(f"   ✓ {len(all_tables)} tabelas encontradas (amostra)")
+    
     def extract_all(self):
         """Extrai todos os recursos"""
         print(f"\n🚀 Iniciando extração do projeto: {self.project_id}\n")
@@ -165,14 +273,43 @@ class GCPToTerraform:
         self.extract_vpn_gateways()
         self.extract_peering()
         
-        # Compute e outros serviços
+        # Compute e Storage
         self.extract_compute()
         self.extract_storage()
+        
+        # Serverless
         self.extract_functions()
+        self.extract_cloud_run()
+        
+        # Containers e Orchestration
         self.extract_gke()
+        self.extract_composer()
+        
+        # Databases
         self.extract_sql()
+        self.extract_redis()
+        self.extract_bigquery()
+        
+        # Messaging
         self.extract_pubsub()
+        
+        # Security e IAM
         self.extract_service_accounts()
+        self.extract_secrets()
+        self.extract_kms()
+        
+        # Networking avançado
+        self.extract_dns()
+        self.extract_load_balancers()
+        
+        # CI/CD e Artifacts
+        self.extract_artifact_registry()
+        
+        # Scheduling
+        self.extract_cloud_scheduler()
+        
+        # Data Processing
+        self.extract_dataflow()
         
         print("="*60)
         print(f"\n✅ Extração concluída!\n")
@@ -444,15 +581,15 @@ class GCPToTerraform:
             if router.get('description'):
                 hcl += f'  description = "{router["description"]}"\n'
             
-            # BGP Configuration\n            if router.get('bgp'):\n                bgp = router['bgp']\n                hcl += '\\n  bgp {\\n'\n                hcl += f'    asn = {bgp.get("asn", 64512)}\\n'\n                if bgp.get('advertiseMode'):\n                    hcl += f'    advertise_mode = \"{bgp[\"advertiseMode\"]}\"\\n'\n                if bgp.get('advertisedGroups'):\n                    hcl += f'    advertised_groups = {json.dumps(bgp[\"advertisedGroups\"])}\\n'\n                hcl += '  }\\n'
+            # BGP Configuration\n            if router.get('bgp'):\n                bgp = router['bgp']\n                hcl += '\n  bgp {\n'\n                hcl += f'    asn = {bgp.get("asn", 64512)}\n'\n                if bgp.get('advertiseMode'):\n                    hcl += f'    advertise_mode = "{bgp["advertiseMode"]}"\n'\n                if bgp.get('advertisedGroups'):\n                    hcl += f'    advertised_groups = {json.dumps(bgp["advertisedGroups"])}\n'\n                hcl += '  }\n'
             
-            hcl += '}\\n\\n'
+            hcl += '}\n\n'
         
         return hcl
     
     def generate_vpn_tf(self) -> str:
-        \"\"\"Gera HCL para VPN Gateways e Tunnels\"\"\"
-        hcl = \"# VPN Gateways\\n\\n\"
+        """Gera HCL para VPN Gateways e Tunnels"""
+        hcl = "# VPN Gateways\n\n"
         
         for gw in self.resources.get('vpn_gateways', []):
             name = gw.get('name', '')
@@ -460,76 +597,76 @@ class GCPToTerraform:
             network_url = gw.get('network', '')
             network_name = network_url.split('/')[-1] if network_url else ''
             
-            hcl += f'resource \"google_compute_ha_vpn_gateway\" \"{tf_name}\" {{\\n'
-            hcl += f'  name    = \"{name}\"\\n'
-            hcl += f'  project = \"{self.project_id}\"\\n'
-            hcl += f'  region  = \"{gw.get(\"region\", \"\").split(\"/\")[-1]}\"\\n'
-            hcl += f'  network = google_compute_network.{self.sanitize_name(network_name)}.id\\n'
+            hcl += f'resource "google_compute_ha_vpn_gateway" "{tf_name}" {{\n'
+            hcl += f'  name    = "{name}"\n'
+            hcl += f'  project = "{self.project_id}"\n'
+            hcl += f'  region  = "{gw.get("region", "").split("/")[-1]}"\n'
+            hcl += f'  network = google_compute_network.{self.sanitize_name(network_name)}.id\n'
             
             if gw.get('description'):
-                hcl += f'  description = \"{gw[\"description\"]}\"\\n'
+                hcl += f'  description = "{gw["description"]}"\n'
             
-            hcl += '}\\n\\n'
+            hcl += '}\n\n'
         
         # VPN Tunnels
         if self.resources.get('vpn_tunnels'):
-            hcl += \"# VPN Tunnels\\n\\n\"
+            hcl += "# VPN Tunnels\n\n"
             
             for tunnel in self.resources.get('vpn_tunnels', []):
                 name = tunnel.get('name', '')
                 tf_name = self.sanitize_name(name)
                 
-                hcl += f'resource \"google_compute_vpn_tunnel\" \"{tf_name}\" {{\\n'
-                hcl += f'  name          = \"{name}\"\\n'
-                hcl += f'  project       = \"{self.project_id}\"\\n'
-                hcl += f'  region        = \"{tunnel.get(\"region\", \"\").split(\"/\")[-1]}\"\\n'
+                hcl += f'resource "google_compute_vpn_tunnel" "{tf_name}" {{\n'
+                hcl += f'  name          = "{name}"\n'
+                hcl += f'  project       = "{self.project_id}"\n'
+                hcl += f'  region        = "{tunnel.get("region", "").split("/")[-1]}"\n'
                 
                 if tunnel.get('description'):
-                    hcl += f'  description   = \"{tunnel[\"description\"]}\"\\n'
+                    hcl += f'  description   = "{tunnel["description"]}"\n'
                 
                 if tunnel.get('peerIp'):
-                    hcl += f'  peer_ip       = \"{tunnel[\"peerIp\"]}\"\\n'
+                    hcl += f'  peer_ip       = "{tunnel["peerIp"]}"\n'
                 
                 if tunnel.get('sharedSecret'):
-                    hcl += f'  shared_secret = \"<REDACTED>\"  # Definir via variável segura\\n'
+                    hcl += f'  shared_secret = "<REDACTED>"  # Definir via variável segura\n'
                 
                 if tunnel.get('ikeVersion'):
-                    hcl += f'  ike_version   = {tunnel[\"ikeVersion\"]}\\n'
+                    hcl += f'  ike_version   = {tunnel["ikeVersion"]}\n'
                 
-                hcl += f'  # Configuração adicional necessária\\n'
-                hcl += '}\\n\\n'
+                hcl += f'  # Configuração adicional necessária\n'
+                hcl += '}\n\n'
         
         return hcl
     
     def generate_peering_tf(self) -> str:
-        \"\"\"Gera HCL para VPC Peering\"\"\"
-        hcl = \"# VPC Peering Connections\\n\\n\"
+        """Gera HCL para VPC Peering"""
+        hcl = "# VPC Peering Connections\n\n"
         
         for peering_info in self.resources.get('peerings', []):
             network = peering_info.get('network', '')
             peering = peering_info.get('peering', {})
             
             name = peering.get('name', '')
-            tf_name = self.sanitize_name(f\"{network}_{name}\")
+            tf_name = self.sanitize_name(f"{network}_{name}")
             
-            hcl += f'resource \"google_compute_network_peering\" \"{tf_name}\" {{\\n'
-            hcl += f'  name         = \"{name}\"\\n'
-            hcl += f'  network      = google_compute_network.{self.sanitize_name(network)}.id\\n'
-            hcl += f'  peer_network = \"{peering.get(\"network\", \"\")}\"\\n'
+            hcl += f'resource "google_compute_network_peering" "{tf_name}" {{\n'
+            hcl += f'  name         = "{name}"\n'
+            hcl += f'  network      = google_compute_network.{self.sanitize_name(network)}.id\n'
+            hcl += f'  peer_network = "{peering.get("network", "")}"\n'
             
             if peering.get('exportCustomRoutes'):
-                hcl += f'  export_custom_routes = true\\n'
+                hcl += f'  export_custom_routes = true\n'
             
             if peering.get('importCustomRoutes'):
-                hcl += f'  import_custom_routes = true\\n'
+                hcl += f'  import_custom_routes = true\n'
             
             if peering.get('exportSubnetRoutesWithPublicIp'):
-                hcl += f'  export_subnet_routes_with_public_ip = true\\n'
+                hcl += f'  export_subnet_routes_with_public_ip = true\n'
             
             if peering.get('importSubnetRoutesWithPublicIp'):
-                hcl += f'  import_subnet_routes_with_public_ip = true\\n'
+                hcl += f'  import_subnet_routes_with_public_ip = true\n'
             
-            hcl += '}\\n\\n'
+            hcl += '}\n\n'
         
         return hcl
     

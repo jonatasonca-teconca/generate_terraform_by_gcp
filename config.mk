@@ -2,11 +2,16 @@
 # Configuração de Projetos e Recursos para Extração GCP
 # ============================================================
 
+# ORGANIZAÇÃO
+# ID da organização (usado para extração em nível de org)
+ORG_ID := 109234159153
+
 # Lista de projetos a serem extraídos
 # Adicione ou remova projetos conforme necessário
 PROJECTS := \
-	infra-sd-host \
-	infra-sd-service
+	teconca-data-dev \
+	teconca-data-staging \
+	teconca-data-prod
 
 # ============================================================
 # Configuração de Recursos por Projeto
@@ -83,8 +88,8 @@ extract-storage-only:
 AVAILABLE_RESOURCES := networks firewall compute storage functions gke sql pubsub bigquery iam
 
 # Configurações regionais padrão
-DEFAULT_REGION := southamerica-east1
-DEFAULT_ZONE := southamerica-east1-a
+DEFAULT_REGION := us-central1
+DEFAULT_ZONE := us-central1-a
 
 # Regiões adicionais para verificar recursos
 REGIONS := \
