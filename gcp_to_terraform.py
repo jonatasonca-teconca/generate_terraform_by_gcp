@@ -323,6 +323,291 @@ class GCPToTerraform:
         self.resources['network_endpoint_groups'] = negs
         print(f"   ✓ {len(negs)} NEGs encontrados")
     
+    def extract_cloud_armor(self):
+        """Extrai Cloud Armor Security Policies"""
+        print("🛡️  Extraindo Cloud Armor...")
+        
+        # Security Policies
+        policies = self.run_gcloud("compute security-policies list")
+        self.resources['security_policies'] = policies
+        print(f"   ✓ {len(policies)} security policies encontradas")
+    
+    def extract_iam_custom_roles(self):
+        """Extrai IAM Custom Roles criadas no projeto"""
+        print("🎭 Extraindo IAM Custom Roles...")
+        
+        # Custom roles do projeto
+        roles = self.run_gcloud(f"iam roles list --project={self.project_id}")
+        self.resources['custom_roles'] = roles
+        print(f"   ✓ {len(roles)} custom roles encontradas")
+    
+    def extract_service_account_keys(self):
+        """Extrai Service Account Keys para auditoria"""
+        print("🔑 Extraindo Service Account Keys...")
+        
+        all_keys = []
+        service_accounts = self.resources.get('service_accounts', [])
+        
+        for sa in service_accounts:
+            email = sa.get('email', '')
+            if email and 'iam.gserviceaccount.com' in email:
+                try:
+                    keys = self.run_gcloud(f"iam service-accounts keys list --iam-account={email}")
+                    for key in keys:
+                        key['service_account'] = email
+                        all_keys.append(key)
+                except:
+                    pass
+        
+        self.resources['sa_keys'] = all_keys
+        print(f"   ✓ {len(all_keys)} service account keys encontradas")
+    
+    def extract_health_checks(self):
+        """Extrai Health Checks (HTTP, HTTPS, TCP, etc)"""
+        print("❤️  Extraindo Health Checks...")
+        
+        # Health checks globais e regionais
+        health_checks = self.run_gcloud("compute health-checks list")
+        self.resources['health_checks'] = health_checks
+        print(f"   ✓ {len(health_checks)} health checks encontrados")
+    
+    def extract_ssl_certificates(self):
+        """Extrai SSL Certificates"""
+        print("🔒 Extraindo SSL Certificates...")
+        
+        # SSL Certificates (managed e self-managed)
+        ssl_certs = self.run_gcloud("compute ssl-certificates list")
+        self.resources['ssl_certificates'] = ssl_certs
+        print(f"   ✓ {len(ssl_certs)} SSL certificates encontrados")
+    
+    def extract_compute_images(self):
+        """Extrai imagens customizadas (excluindo imagens públicas)"""
+        print("💿 Extraindo Compute Images...")
+        
+        # Apenas imagens custom do projeto
+        images = self.run_gcloud("compute images list --no-standard-images")
+        self.resources['compute_images'] = images
+        print(f"   ✓ {len(images)} imagens customizadas encontradas")
+    
+    def extract_pubsub_complete(self):
+        """Extrai Pub/Sub completo (topics, subscriptions, schemas)"""
+        print("📬 Extraindo Pub/Sub Completo...")
+        
+        # Subscriptions
+        subscriptions = self.run_gcloud("pubsub subscriptions list")
+        self.resources['pubsub_subscriptions'] = subscriptions
+        print(f"   ✓ {len(subscriptions)} subscriptions encontradas")
+        
+        # Schemas
+        schemas = self.run_gcloud("pubsub schemas list")
+        self.resources['pubsub_schemas'] = schemas
+        print(f"   ✓ {len(schemas)} schemas encontrados")
+    
+    def extract_bigquery_tables(self):
+        """Extrai BigQuery tables e views por dataset"""
+        print("📊 Extraindo BigQuery Tables...")
+        
+        # Usar comando bq correto
+        try:
+            # Listar todos os datasets primeiro
+            result = subprocess.run(
+                f"bq ls --project_id={self.project_id} --format=json".split(),
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            datasets = json.loads(result.stdout) if result.stdout else []
+            
+            all_tables = []
+            for dataset in datasets:
+                dataset_id = dataset.get('datasetReference', {}).get('datasetId', '')
+                if dataset_id:
+                    try:
+                        # Listar tables do dataset
+                        table_result = subprocess.run(
+                            f"bq ls --project_id={self.project_id} --format=json {dataset_id}".split(),
+                            capture_output=True,
+                            text=True,
+                            check=True
+                        )
+                        tables = json.loads(table_result.stdout) if table_result.stdout else []
+                        for table in tables:
+                            table['dataset_id'] = dataset_id
+                            all_tables.append(table)
+                    except:
+                        pass
+            
+            self.resources['bigquery_tables'] = all_tables
+            print(f"   ✓ {len(all_tables)} tables/views encontradas")
+        except Exception as e:
+            print(f"   ⚠️  Erro ao extrair BigQuery tables: {e}")
+            self.resources['bigquery_tables'] = []
+    
+    def extract_gke_node_pools(self):
+        """Extrai GKE Node Pools"""
+        print("☸️  Extraindo GKE Node Pools...")
+        
+        all_node_pools = []
+        clusters = self.resources.get('gke_clusters', [])
+        
+        for cluster in clusters:
+            cluster_name = cluster.get('name', '')
+            location = cluster.get('location', '') or cluster.get('zone', '')
+            
+            if cluster_name and location:
+                try:
+                    # Usar --region ou --zone dependendo do tipo de cluster
+                    location_flag = "--region" if not location.endswith(('-a', '-b', '-c', '-d', '-e', '-f')) else "--zone"
+                    node_pools = self.run_gcloud(f"container node-pools list --cluster={cluster_name} {location_flag}={location}")
+                    for pool in node_pools:
+                        pool['cluster_name'] = cluster_name
+                        pool['cluster_location'] = location
+                        all_node_pools.append(pool)
+                except:
+                    pass
+        
+        self.resources['gke_node_pools'] = all_node_pools
+        print(f"   ✓ {len(all_node_pools)} node pools encontrados")
+    
+    def extract_monitoring_dashboards(self):
+        """Extrai Monitoring Dashboards"""
+        print("📈 Extraindo Monitoring Dashboards...")
+        dashboards = self.run_gcloud("monitoring dashboards list")
+        self.resources['monitoring_dashboards'] = dashboards
+        print(f"   ✓ {len(dashboards)} dashboards encontrados")
+    
+    def extract_alerting_policies(self):
+        """Extrai Alerting Policies"""
+        print("🔔 Extraindo Alerting Policies...")
+        try:
+            policies = self.run_gcloud("alpha monitoring policies list")
+            self.resources['alerting_policies'] = policies
+            print(f"   ✓ {len(policies)} alerting policies encontradas")
+        except:
+            print(f"   ⚠️  Alpha component necessário para alerting policies")
+            self.resources['alerting_policies'] = []
+    
+    def extract_cloud_interconnect(self):
+        """Extrai Cloud Interconnect"""
+        print("🔗 Extraindo Cloud Interconnect...")
+        
+        # Interconnects
+        interconnects = self.run_gcloud("compute interconnects list")
+        self.resources['interconnects'] = interconnects
+        print(f"   ✓ {len(interconnects)} interconnects encontrados")
+        
+        # Interconnect Attachments
+        attachments = self.run_gcloud("compute interconnects attachments list")
+        self.resources['interconnect_attachments'] = attachments
+        print(f"   ✓ {len(attachments)} interconnect attachments encontrados")
+    
+    def extract_cloud_spanner(self):
+        """Extrai Cloud Spanner instances"""
+        print("🗄️  Extraindo Cloud Spanner...")
+        instances = self.run_gcloud("spanner instances list")
+        self.resources['spanner_instances'] = instances
+        print(f"   ✓ {len(instances)} Spanner instances encontradas")
+    
+    def extract_filestore(self):
+        """Extrai Filestore instances"""
+        print("📁 Extraindo Filestore...")
+        # Filestore requer location
+        try:
+            instances = self.run_gcloud("filestore instances list --location=-")
+            self.resources['filestore_instances'] = instances
+            print(f"   ✓ {len(instances)} Filestore instances encontradas")
+        except:
+            print(f"   ⚠️  Erro ao extrair Filestore (pode precisar especificar --location)")
+            self.resources['filestore_instances'] = []
+    
+    def extract_dataproc(self):
+        """Extrai Dataproc clusters"""
+        print("🔬 Extraindo Dataproc Clusters...")
+        try:
+            clusters = self.run_gcloud("dataproc clusters list --region=us-central1")
+            self.resources['dataproc_clusters'] = clusters
+            print(f"   ✓ {len(clusters)} Dataproc clusters encontrados")
+        except:
+            # Tentar listar em todas as regiões
+            try:
+                all_clusters = []
+                regions = ['us-central1', 'us-east1', 'europe-west1']
+                for region in regions:
+                    clusters = self.run_gcloud(f"dataproc clusters list --region={region}")
+                    all_clusters.extend(clusters)
+                self.resources['dataproc_clusters'] = all_clusters
+                print(f"   ✓ {len(all_clusters)} Dataproc clusters encontrados")
+            except:
+                print(f"   ⚠️  Erro ao extrair Dataproc clusters")
+                self.resources['dataproc_clusters'] = []
+    
+    def extract_autoscalers(self):
+        """Extrai Autoscalers para Managed Instance Groups"""
+        print("📈 Extraindo Autoscalers...")
+        try:
+            # Listar todos os autoscalers em todas as zonas
+            all_autoscalers = []
+            
+            # Autoscalers regionais
+            try:
+                regional_autoscalers = self.run_gcloud("compute instance-groups managed list")
+                for mig in regional_autoscalers:
+                    if mig.get('zone'):
+                        zone = mig['zone'].split('/')[-1]
+                        name = mig.get('name', '')
+                        try:
+                            autoscaler = self.run_gcloud(
+                                f"compute instance-groups managed describe {name} --zone={zone} --format=json"
+                            )
+                            if autoscaler and isinstance(autoscaler, list) and len(autoscaler) > 0:
+                                autoscaler_data = autoscaler[0]
+                                if autoscaler_data.get('autoscaler'):
+                                    all_autoscalers.append({
+                                        'name': autoscaler_data['autoscaler'].split('/')[-1],
+                                        'mig_name': name,
+                                        'zone': zone,
+                                        'target': autoscaler_data.get('autoscaler', ''),
+                                        'policy': autoscaler_data.get('autoscalingPolicy', {})
+                                    })
+                        except:
+                            pass
+            except Exception as e:
+                print(f"   ⚠️  Erro ao listar MIGs: {str(e)}")
+            
+            self.resources['autoscalers'] = all_autoscalers
+            print(f"   ✓ {len(all_autoscalers)} Autoscalers encontrados")
+        except Exception as e:
+            print(f"   ⚠️  Erro ao extrair Autoscalers: {str(e)}")
+            self.resources['autoscalers'] = []
+    
+    def extract_bigtable(self):
+        """Extrai instâncias Bigtable"""
+        print("🗄️  Extraindo Cloud Bigtable...")
+        try:
+            instances = self.run_gcloud("bigtable instances list")
+            
+            # Para cada instância, extrair clusters
+            for instance in instances:
+                instance_id = instance.get('name', '').split('/')[-1]
+                try:
+                    clusters = self.run_gcloud(f"bigtable clusters list --instances={instance_id}")
+                    instance['clusters'] = clusters
+                except:
+                    instance['clusters'] = []
+                
+                # Extrair tables
+                try:
+                    tables = self.run_gcloud(f"bigtable tables list --instances={instance_id}")
+                    instance['tables'] = tables
+                except:
+                    instance['tables'] = []
+            
+            self.resources['bigtable_instances'] = instances
+            print(f"   ✓ {len(instances)} instâncias Bigtable encontradas")
+        except Exception as e:
+            print(f"   ⚠️  Bigtable não disponível ou sem instâncias: {str(e)}")
+            self.resources['bigtable_instances'] = []
+    
     def extract_bigquery_extended(self):
         """Extrai BigQuery de forma mais completa"""
         print("📊 Extraindo BigQuery (estendido)...")
@@ -359,6 +644,7 @@ class GCPToTerraform:
         self.extract_compute()
         self.extract_instance_groups()  # FASE 1: MIGs
         self.extract_disks()  # FASE 1: Disks
+        self.extract_compute_images()  # FASE 2: Custom Images
         self.extract_storage()
         
         # Serverless
@@ -367,27 +653,40 @@ class GCPToTerraform:
         
         # Containers e Orchestration
         self.extract_gke()
+        self.extract_gke_node_pools()  # FASE 3: GKE Node Pools
         self.extract_composer()
         
         # Databases
         self.extract_sql()
         self.extract_redis()
         self.extract_bigquery()
+        self.extract_bigquery_tables()  # FASE 3: BigQuery Tables
+        self.extract_cloud_spanner()  # FASE 3: Cloud Spanner
         
         # Messaging
         self.extract_pubsub()
+        self.extract_pubsub_complete()  # FASE 3: Pub/Sub Subscriptions e Schemas
         
         # Security e IAM
         self.extract_service_accounts()
         self.extract_iam_policies()  # FASE 1: IAM Policies
+        self.extract_iam_custom_roles()  # FASE 2: Custom Roles
+        self.extract_service_account_keys()  # FASE 2: SA Keys
         self.extract_secrets()
         self.extract_kms()
         
         # Networking avançado
         self.extract_dns()
         self.extract_load_balancers()
+        self.extract_health_checks()  # FASE 2: Health Checks
+        self.extract_ssl_certificates()  # FASE 2: SSL Certificates
         self.extract_network_endpoint_groups()  # FASE 1: NEGs
         self.extract_cloud_nat()  # FASE 1: Cloud NAT
+        self.extract_cloud_armor()  # FASE 2: Cloud Armor
+        self.extract_cloud_interconnect()  # FASE 3: Cloud Interconnect
+        
+        # Storage avançado
+        self.extract_filestore()  # FASE 3: Filestore
         
         # CI/CD e Artifacts
         self.extract_artifact_registry()
@@ -397,6 +696,17 @@ class GCPToTerraform:
         
         # Data Processing
         self.extract_dataflow()
+        self.extract_dataproc()  # FASE 3: Dataproc
+        
+        # Compute Avançado
+        self.extract_autoscalers()  # FASE 4: Autoscalers
+        
+        # Data & Analytics Avançado
+        self.extract_bigtable()  # FASE 4: Bigtable
+        
+        # Monitoring e Observability
+        self.extract_monitoring_dashboards()  # FASE 3: Monitoring Dashboards
+        self.extract_alerting_policies()  # FASE 3: Alerting Policies
         
         print("="*60)
         print(f"\n✅ Extração concluída!\n")
@@ -1111,6 +1421,642 @@ class GCPToTerraform:
         
         return hcl
     
+    def generate_cloud_armor_tf(self) -> str:
+        """Gera HCL para Cloud Armor Security Policies"""
+        hcl = "# Cloud Armor Security Policies\n\n"
+        
+        for policy in self.resources.get('security_policies', []):
+            name = policy.get('name', '')
+            tf_name = self.sanitize_name(name)
+            
+            hcl += f'resource "google_compute_security_policy" "{tf_name}" {{\n'
+            hcl += f'  name    = "{name}"\n'
+            hcl += f'  project = "{self.project_id}"\n'
+            
+            if policy.get('description'):
+                hcl += f'  description = "{policy["description"]}"\n'
+            
+            # Rules
+            if policy.get('rules'):
+                for rule in policy['rules']:
+                    hcl += '\n  rule {\n'
+                    hcl += f'    action   = "{rule.get("action", "allow")}"\n'
+                    hcl += f'    priority = {rule.get("priority", 1000)}\n'
+                    
+                    if rule.get('description'):
+                        hcl += f'    description = "{rule["description"]}"\n'
+                    
+                    if rule.get('match'):
+                        match = rule['match']
+                        hcl += '\n    match {\n'
+                        if match.get('versionedExpr'):
+                            hcl += f'      versioned_expr = "{match["versionedExpr"]}"\n'
+                        if match.get('config'):
+                            config = match['config']
+                            hcl += '      config {\n'
+                            if config.get('srcIpRanges'):
+                                hcl += f'        src_ip_ranges = {json.dumps(config["srcIpRanges"])}\n'
+                            hcl += '      }\n'
+                        hcl += '    }\n'
+                    
+                    hcl += '  }\n'
+            
+            hcl += '}\n\n'
+        
+        return hcl
+    
+    def generate_custom_roles_tf(self) -> str:
+        """Gera HCL para IAM Custom Roles"""
+        hcl = "# IAM Custom Roles\n\n"
+        
+        for role in self.resources.get('custom_roles', []):
+            name = role.get('name', '').split('/')[-1]
+            tf_name = self.sanitize_name(name)
+            
+            hcl += f'resource "google_project_iam_custom_role" "{tf_name}" {{\n'
+            hcl += f'  role_id     = "{name}"\n'
+            hcl += f'  project     = "{self.project_id}"\n'
+            hcl += f'  title       = "{role.get("title", name)}"\n'
+            
+            if role.get('description'):
+                hcl += f'  description = "{role["description"]}"\n'
+            
+            if role.get('includedPermissions'):
+                hcl += '\n  permissions = [\n'
+                for perm in role['includedPermissions']:
+                    hcl += f'    "{perm}",\n'
+                hcl += '  ]\n'
+            
+            if role.get('stage'):
+                hcl += f'  stage = "{role["stage"]}"\n'
+            
+            hcl += '}\n\n'
+        
+        return hcl
+    
+    def generate_health_checks_tf(self) -> str:
+        """Gera HCL para Health Checks"""
+        hcl = "# Health Checks\n\n"
+        
+        for hc in self.resources.get('health_checks', []):
+            name = hc.get('name', '')
+            tf_name = self.sanitize_name(name)
+            hc_type = hc.get('type', 'HTTP').lower()
+            
+            hcl += f'resource "google_compute_health_check" "{tf_name}" {{\n'
+            hcl += f'  name    = "{name}"\n'
+            hcl += f'  project = "{self.project_id}"\n'
+            
+            if hc.get('description'):
+                hcl += f'  description = "{hc["description"]}"\n'
+            
+            # Check interval e timeout
+            if hc.get('checkIntervalSec'):
+                hcl += f'  check_interval_sec = {hc["checkIntervalSec"]}\n'
+            if hc.get('timeoutSec'):
+                hcl += f'  timeout_sec = {hc["timeoutSec"]}\n'
+            if hc.get('healthyThreshold'):
+                hcl += f'  healthy_threshold = {hc["healthyThreshold"]}\n'
+            if hc.get('unhealthyThreshold'):
+                hcl += f'  unhealthy_threshold = {hc["unhealthyThreshold"]}\n'
+            
+            # Configuração específica do tipo
+            type_config = hc.get(f'{hc_type}HealthCheck', {})
+            if type_config:
+                hcl += f'\n  {hc_type}_health_check {{\n'
+                if type_config.get('port'):
+                    hcl += f'    port = {type_config["port"]}\n'
+                if type_config.get('requestPath'):
+                    hcl += f'    request_path = "{type_config["requestPath"]}"\n'
+                if type_config.get('proxyHeader'):
+                    hcl += f'    proxy_header = "{type_config["proxyHeader"]}"\n'
+                if type_config.get('response'):
+                    hcl += f'    response = "{type_config["response"]}"\n'
+                hcl += '  }\n'
+            
+            hcl += '}\n\n'
+        
+        return hcl
+    
+    def generate_ssl_certificates_tf(self) -> str:
+        """Gera HCL para SSL Certificates"""
+        hcl = "# SSL Certificates\n\n"
+        
+        for cert in self.resources.get('ssl_certificates', []):
+            name = cert.get('name', '')
+            tf_name = self.sanitize_name(name)
+            cert_type = cert.get('type', 'SELF_MANAGED')
+            
+            if cert_type == 'MANAGED':
+                hcl += f'resource "google_compute_managed_ssl_certificate" "{tf_name}" {{\n'
+                hcl += f'  name    = "{name}"\n'
+                hcl += f'  project = "{self.project_id}"\n'
+                
+                if cert.get('managed', {}).get('domains'):
+                    hcl += '\n  managed {\n'
+                    hcl += f'    domains = {json.dumps(cert["managed"]["domains"])}\n'
+                    hcl += '  }\n'
+            else:
+                hcl += f'resource "google_compute_ssl_certificate" "{tf_name}" {{\n'
+                hcl += f'  name    = "{name}"\n'
+                hcl += f'  project = "{self.project_id}"\n'
+                hcl += '  # Note: certificate e private_key devem ser fornecidos manualmente\n'
+                hcl += '  # certificate = file("path/to/cert.pem")\n'
+                hcl += '  # private_key = file("path/to/key.pem")\n'
+            
+            if cert.get('description'):
+                hcl += f'  description = "{cert["description"]}"\n'
+            
+            hcl += '}\n\n'
+        
+        return hcl
+    
+    def generate_compute_images_tf(self) -> str:
+        """Gera HCL para Compute Images customizadas"""
+        hcl = "# Compute Custom Images\n\n"
+        
+        for img in self.resources.get('compute_images', []):
+            name = img.get('name', '')
+            tf_name = self.sanitize_name(name)
+            
+            hcl += f'resource "google_compute_image" "{tf_name}" {{\n'
+            hcl += f'  name    = "{name}"\n'
+            hcl += f'  project = "{self.project_id}"\n'
+            
+            if img.get('description'):
+                hcl += f'  description = "{img["description"]}"\n'
+            
+            if img.get('family'):
+                hcl += f'  family = "{img["family"]}"\n'
+            
+            # Source disk (se existe)
+            if img.get('sourceDisk'):
+                source_disk = img['sourceDisk'].split('/')[-1]
+                hcl += f'  source_disk = "{source_disk}"\n'
+            
+            # Labels
+            if img.get('labels'):
+                hcl += '\n  labels = {\n'
+                for key, value in img['labels'].items():
+                    hcl += f'    {key} = "{value}"\n'
+                hcl += '  }\n'
+            
+            hcl += '}\n\n'
+        
+        return hcl
+    
+    def generate_pubsub_subscriptions_tf(self) -> str:
+        """Gera HCL para Pub/Sub Subscriptions e Schemas"""
+        hcl = "# Pub/Sub Subscriptions\n\n"
+        
+        for sub in self.resources.get('pubsub_subscriptions', []):
+            name = sub.get('name', '').split('/')[-1]
+            tf_name = self.sanitize_name(name)
+            topic = sub.get('topic', '').split('/')[-1]
+            
+            hcl += f'resource "google_pubsub_subscription" "{tf_name}" {{\n'
+            hcl += f'  name    = "{name}"\n'
+            hcl += f'  topic   = "{topic}"\n'
+            hcl += f'  project = "{self.project_id}"\n'
+            
+            if sub.get('ackDeadlineSeconds'):
+                hcl += f'  ack_deadline_seconds = {sub["ackDeadlineSeconds"]}\n'
+            
+            if sub.get('retainAckedMessages'):
+                hcl += f'  retain_acked_messages = {str(sub["retainAckedMessages"]).lower()}\n'
+            
+            if sub.get('messageRetentionDuration'):
+                hcl += f'  message_retention_duration = "{sub["messageRetentionDuration"]}"\n'
+            
+            hcl += '}\n\n'
+        
+        # Schemas
+        hcl += "# Pub/Sub Schemas\n\n"
+        for schema in self.resources.get('pubsub_schemas', []):
+            name = schema.get('name', '').split('/')[-1]
+            tf_name = self.sanitize_name(name)
+            
+            hcl += f'resource "google_pubsub_schema" "{tf_name}" {{\n'
+            hcl += f'  name    = "{name}"\n'
+            hcl += f'  project = "{self.project_id}"\n'
+            
+            if schema.get('type'):
+                hcl += f'  type = "{schema["type"]}"\n'
+            
+            if schema.get('definition'):
+                hcl += f'  definition = <<EOF\n{schema["definition"]}\nEOF\n'
+            
+            hcl += '}\n\n'
+        
+        return hcl
+    
+    def generate_gke_node_pools_tf(self) -> str:
+        """Gera HCL para GKE Node Pools"""
+        hcl = "# GKE Node Pools\n\n"
+        
+        for pool in self.resources.get('gke_node_pools', []):
+            name = pool.get('name', '')
+            cluster_name = pool.get('cluster_name', '')
+            location = pool.get('cluster_location', '')
+            tf_name = self.sanitize_name(f"{cluster_name}_{name}")
+            
+            hcl += f'resource "google_container_node_pool" "{tf_name}" {{\n'
+            hcl += f'  name     = "{name}"\n'
+            hcl += f'  cluster  = "{cluster_name}"\n'
+            hcl += f'  location = "{location}"\n'
+            hcl += f'  project  = "{self.project_id}"\n'
+            
+            if pool.get('initialNodeCount'):
+                hcl += f'  initial_node_count = {pool["initialNodeCount"]}\n'
+            
+            # Node config
+            if pool.get('config'):
+                config = pool['config']
+                hcl += '\n  node_config {\n'
+                if config.get('machineType'):
+                    hcl += f'    machine_type = "{config["machineType"]}"\n'
+                if config.get('diskSizeGb'):
+                    hcl += f'    disk_size_gb = {config["diskSizeGb"]}\n'
+                if config.get('diskType'):
+                    hcl += f'    disk_type = "{config["diskType"]}"\n'
+                if config.get('imageType'):
+                    hcl += f'    image_type = "{config["imageType"]}"\n'
+                hcl += '  }\n'
+            
+            hcl += '}\n\n'
+        
+        return hcl
+    
+    def generate_spanner_tf(self) -> str:
+        """Gera HCL para Cloud Spanner"""
+        hcl = "# Cloud Spanner Instances\n\n"
+        
+        for instance in self.resources.get('spanner_instances', []):
+            name = instance.get('name', '').split('/')[-1]
+            tf_name = self.sanitize_name(name)
+            
+            hcl += f'resource "google_spanner_instance" "{tf_name}" {{\n'
+            hcl += f'  name         = "{name}"\n'
+            hcl += f'  project      = "{self.project_id}"\n'
+            hcl += f'  config       = "{instance.get("config", "").split("/")[-1]}"\n'
+            hcl += f'  display_name = "{instance.get("displayName", name)}"\n'
+            
+            if instance.get('nodeCount'):
+                hcl += f'  num_nodes = {instance["nodeCount"]}\n'
+            
+            if instance.get('processingUnits'):
+                hcl += f'  processing_units = {instance["processingUnits"]}\n'
+            
+            hcl += '}\n\n'
+        
+        return hcl
+    
+    def generate_filestore_tf(self) -> str:
+        """Gera HCL para Filestore"""
+        hcl = "# Filestore Instances\n\n"
+        
+        for instance in self.resources.get('filestore_instances', []):
+            name = instance.get('name', '').split('/')[-1]
+            tf_name = self.sanitize_name(name)
+            
+            hcl += f'resource "google_filestore_instance" "{tf_name}" {{\n'
+            hcl += f'  name     = "{name}"\n'
+            hcl += f'  project  = "{self.project_id}"\n'
+            hcl += f'  location = "{instance.get("location", "").split("/")[-1]}"\n'
+            hcl += f'  tier     = "{instance.get("tier", "STANDARD")}"\n'
+            
+            if instance.get('fileShares'):
+                for share in instance['fileShares']:
+                    hcl += '\n  file_shares {\n'
+                    hcl += f'    name        = "{share.get("name", "")}"\n'
+                    hcl += f'    capacity_gb = {share.get("capacityGb", 1024)}\n'
+                    hcl += '  }\n'
+            
+            if instance.get('networks'):
+                for network in instance['networks']:
+                    hcl += '\n  networks {\n'
+                    network_name = network.get('network', '').split('/')[-1]
+                    hcl += f'    network = "{network_name}"\n'
+                    hcl += f'    modes   = ["MODE_IPV4"]\n'
+                    hcl += '  }\n'
+            
+            hcl += '}\n\n'
+        
+        return hcl
+    
+    def generate_dataproc_tf(self) -> str:
+        """Gera HCL para Dataproc"""
+        hcl = "# Dataproc Clusters\n\n"
+        
+        for cluster in self.resources.get('dataproc_clusters', []):
+            name = cluster.get('clusterName', '')
+            tf_name = self.sanitize_name(name)
+            
+            hcl += f'resource "google_dataproc_cluster" "{tf_name}" {{\n'
+            hcl += f'  name    = "{name}"\n'
+            hcl += f'  project = "{self.project_id}"\n'
+            hcl += f'  region  = "{cluster.get("location", "").split("/")[-1]}"\n'
+            
+            # Cluster config
+            if cluster.get('config'):
+                config = cluster['config']
+                
+                # Master config
+                if config.get('masterConfig'):
+                    master = config['masterConfig']
+                    hcl += '\n  cluster_config {\n'
+                    hcl += '    master_config {\n'
+                    if master.get('numInstances'):
+                        hcl += f'      num_instances = {master["numInstances"]}\n'
+                    if master.get('machineType'):
+                        hcl += f'      machine_type = "{master["machineType"].split("/")[-1]}"\n'
+                    if master.get('diskConfig', {}).get('bootDiskSizeGb'):
+                        hcl += f'      disk_config {{\n'
+                        hcl += f'        boot_disk_size_gb = {master["diskConfig"]["bootDiskSizeGb"]}\n'
+                        hcl += '      }\n'
+                    hcl += '    }\n'
+                    hcl += '  }\n'
+            
+            hcl += '}\n\n'
+        
+        return hcl
+    
+    def generate_autoscalers_tf(self) -> str:
+        """Gera HCL para Autoscalers"""
+        hcl = "# Compute Autoscalers\n\n"
+        
+        for autoscaler in self.resources.get('autoscalers', []):
+            name = autoscaler.get('name', '')
+            tf_name = self.sanitize_name(name)
+            mig_name = autoscaler.get('mig_name', '')
+            zone = autoscaler.get('zone', '')
+            
+            hcl += f'resource "google_compute_autoscaler" "{tf_name}" {{\n'
+            hcl += f'  name    = "{name}"\n'
+            hcl += f'  project = "{self.project_id}"\n'
+            hcl += f'  zone    = "{zone}"\n'
+            hcl += f'  target  = google_compute_instance_group_manager.{self.sanitize_name(mig_name)}.id\n'
+            
+            # Autoscaling policy
+            policy = autoscaler.get('policy', {})
+            if policy:
+                hcl += '\n  autoscaling_policy {\n'
+                
+                if policy.get('minNumReplicas'):
+                    hcl += f'    min_replicas = {policy["minNumReplicas"]}\n'
+                if policy.get('maxNumReplicas'):
+                    hcl += f'    max_replicas = {policy["maxNumReplicas"]}\n'
+                if policy.get('coolDownPeriodSec'):
+                    hcl += f'    cooldown_period = {policy["coolDownPeriodSec"]}\n'
+                
+                # CPU utilization
+                if policy.get('cpuUtilization'):
+                    cpu = policy['cpuUtilization']
+                    hcl += '\n    cpu_utilization {\n'
+                    if cpu.get('utilizationTarget'):
+                        hcl += f'      target = {cpu["utilizationTarget"]}\n'
+                    hcl += '    }\n'
+                
+                # Load balancing utilization
+                if policy.get('loadBalancingUtilization'):
+                    lb = policy['loadBalancingUtilization']
+                    hcl += '\n    load_balancing_utilization {\n'
+                    if lb.get('utilizationTarget'):
+                        hcl += f'      target = {lb["utilizationTarget"]}\n'
+                    hcl += '    }\n'
+                
+                # Custom metrics
+                if policy.get('customMetricUtilizations'):
+                    for metric in policy['customMetricUtilizations']:
+                        hcl += '\n    metric {\n'
+                        if metric.get('metric'):
+                            hcl += f'      name   = "{metric["metric"]}"\n'
+                        if metric.get('utilizationTarget'):
+                            hcl += f'      target = {metric["utilizationTarget"]}\n'
+                        if metric.get('utilizationTargetType'):
+                            hcl += f'      type   = "{metric["utilizationTargetType"]}"\n'
+                        hcl += '    }\n'
+                
+                hcl += '  }\n'
+            
+            hcl += '}\n\n'
+        
+        return hcl
+    
+    def generate_bigtable_tf(self) -> str:
+        """Gera HCL para Cloud Bigtable"""
+        hcl = "# Cloud Bigtable Instances\n\n"
+        
+        for instance in self.resources.get('bigtable_instances', []):
+            name = instance.get('name', '').split('/')[-1]
+            tf_name = self.sanitize_name(name)
+            
+            hcl += f'resource "google_bigtable_instance" "{tf_name}" {{\n'
+            hcl += f'  name         = "{name}"\n'
+            hcl += f'  project      = "{self.project_id}"\n'
+            
+            if instance.get('displayName'):
+                hcl += f'  display_name = "{instance["displayName"]}"\n'
+            
+            # Instance type
+            if instance.get('type'):
+                instance_type = instance['type'].lower()
+                if instance_type == 'production':
+                    hcl += f'  instance_type = "PRODUCTION"\n'
+                elif instance_type == 'development':
+                    hcl += f'  instance_type = "DEVELOPMENT"\n'
+            
+            # Clusters
+            if instance.get('clusters'):
+                for cluster in instance['clusters']:
+                    cluster_id = cluster.get('name', '').split('/')[-1]
+                    hcl += f'\n  cluster {{\n'
+                    hcl += f'    cluster_id   = "{cluster_id}"\n'
+                    
+                    if cluster.get('location'):
+                        zone = cluster['location'].split('/')[-1]
+                        hcl += f'    zone         = "{zone}"\n'
+                    
+                    if cluster.get('serveNodes'):
+                        hcl += f'    num_nodes    = {cluster["serveNodes"]}\n'
+                    
+                    if cluster.get('defaultStorageType'):
+                        storage_type = cluster['defaultStorageType']
+                        hcl += f'    storage_type = "{storage_type}"\n'
+                    
+                    hcl += '  }\n'
+            
+            # Labels
+            if instance.get('labels'):
+                hcl += '\n  labels = {\n'
+                for key, value in instance['labels'].items():
+                    hcl += f'    {key} = "{value}"\n'
+                hcl += '  }\n'
+            
+            hcl += '}\n\n'
+        
+        # Tables
+        if self.resources.get('bigtable_instances'):
+            hcl += "# Cloud Bigtable Tables\n\n"
+            for instance in self.resources.get('bigtable_instances', []):
+                instance_name = instance.get('name', '').split('/')[-1]
+                instance_tf_name = self.sanitize_name(instance_name)
+                
+                for table in instance.get('tables', []):
+                    table_name = table.get('name', '').split('/')[-1]
+                    table_tf_name = self.sanitize_name(f"{instance_name}_{table_name}")
+                    
+                    hcl += f'resource "google_bigtable_table" "{table_tf_name}" {{\n'
+                    hcl += f'  name          = "{table_name}"\n'
+                    hcl += f'  instance_name = google_bigtable_instance.{instance_tf_name}.name\n'
+                    hcl += f'  project       = "{self.project_id}"\n'
+                    
+                    # Column families
+                    if table.get('columnFamilies'):
+                        for cf_name, cf_data in table['columnFamilies'].items():
+                            hcl += f'\n  column_family {{\n'
+                            hcl += f'    family = "{cf_name}"\n'
+                            hcl += '  }\n'
+                    
+                    hcl += '}\n\n'
+        
+        return hcl
+    
+    def generate_bigquery_tables_tf(self) -> str:
+        """Gera HCL para BigQuery Tables"""
+        hcl = "# BigQuery Tables\n\n"
+        
+        for table in self.resources.get('bigquery_tables', []):
+            dataset_id = table.get('dataset_id', '')
+            table_id = table.get('table_id', '')
+            tf_name = self.sanitize_name(f"{dataset_id}_{table_id}")
+            
+            hcl += f'resource "google_bigquery_table" "{tf_name}" {{\n'
+            hcl += f'  dataset_id = "{dataset_id}"\n'
+            hcl += f'  table_id   = "{table_id}"\n'
+            hcl += f'  project    = "{self.project_id}"\n'
+            
+            if table.get('type') == 'TABLE':
+                if table.get('schema'):
+                    hcl += '\n  schema = <<EOF\n'
+                    hcl += json.dumps(table['schema'], indent=2)
+                    hcl += '\nEOF\n'
+            
+            elif table.get('type') == 'VIEW':
+                if table.get('query'):
+                    hcl += '\n  view {\n'
+                    hcl += f'    query          = <<EOF\n{table["query"]}\nEOF\n'
+                    hcl += f'    use_legacy_sql = false\n'
+                    hcl += '  }\n'
+            
+            if table.get('description'):
+                hcl += f'  description = "{table["description"]}"\n'
+            
+            if table.get('expirationTime'):
+                hcl += f'  expiration_time = {table["expirationTime"]}\n'
+            
+            hcl += '}\n\n'
+        
+        return hcl
+    
+    def generate_monitoring_dashboards_tf(self) -> str:
+        """Gera HCL para Monitoring Dashboards"""
+        hcl = "# Monitoring Dashboards\n\n"
+        
+        for dashboard in self.resources.get('monitoring_dashboards', []):
+            name = dashboard.get('name', '').split('/')[-1]
+            tf_name = self.sanitize_name(name)
+            
+            hcl += f'resource "google_monitoring_dashboard" "{tf_name}" {{\n'
+            hcl += f'  dashboard_json = <<EOF\n'
+            hcl += json.dumps(dashboard, indent=2)
+            hcl += '\nEOF\n'
+            hcl += '}\n\n'
+        
+        return hcl
+    
+    def generate_alerting_policies_tf(self) -> str:
+        """Gera HCL para Alerting Policies"""
+        hcl = "# Alerting Policies\n\n"
+        
+        for policy in self.resources.get('alerting_policies', []):
+            name = policy.get('name', '').split('/')[-1]
+            tf_name = self.sanitize_name(name)
+            
+            hcl += f'resource "google_monitoring_alert_policy" "{tf_name}" {{\n'
+            hcl += f'  display_name = "{policy.get("displayName", name)}"\n'
+            hcl += f'  project      = "{self.project_id}"\n'
+            
+            if policy.get('enabled'):
+                hcl += f'  enabled = {str(policy["enabled"]).lower()}\n'
+            
+            if policy.get('combiner'):
+                hcl += f'  combiner = "{policy["combiner"]}"\n'
+            
+            # Conditions
+            if policy.get('conditions'):
+                for condition in policy['conditions']:
+                    hcl += '\n  conditions {\n'
+                    hcl += f'    display_name = "{condition.get("displayName", "")}"\n'
+                    hcl += '  }\n'
+            
+            # Notification channels
+            if policy.get('notificationChannels'):
+                hcl += '\n  notification_channels = [\n'
+                for channel in policy['notificationChannels']:
+                    channel_id = channel.split('/')[-1]
+                    hcl += f'    "{channel_id}",\n'
+                hcl += '  ]\n'
+            
+            hcl += '}\n\n'
+        
+        return hcl
+    
+    def generate_interconnect_tf(self) -> str:
+        """Gera HCL para Cloud Interconnect"""
+        hcl = "# Cloud Interconnect\n\n"
+        
+        # Interconnects
+        for interconnect in self.resources.get('interconnects', []):
+            name = interconnect.get('name', '')
+            tf_name = self.sanitize_name(name)
+            
+            hcl += f'resource "google_compute_interconnect" "{tf_name}" {{\n'
+            hcl += f'  name                  = "{name}"\n'
+            hcl += f'  project               = "{self.project_id}"\n'
+            hcl += f'  customer_name         = "{interconnect.get("customerName", "")}"\n'
+            hcl += f'  interconnect_type     = "{interconnect.get("interconnectType", "DEDICATED")}"\n'
+            hcl += f'  link_type             = "{interconnect.get("linkType", "LINK_TYPE_ETHERNET_10G_LR")}"\n'
+            hcl += f'  location              = "{interconnect.get("location", "").split("/")[-1]}"\n'
+            hcl += f'  requested_link_count  = {interconnect.get("requestedLinkCount", 1)}\n'
+            hcl += '}\n\n'
+        
+        # Interconnect Attachments (VLAN Attachments)
+        hcl += "# Interconnect Attachments\n\n"
+        for attachment in self.resources.get('interconnect_attachments', []):
+            name = attachment.get('name', '')
+            tf_name = self.sanitize_name(name)
+            
+            hcl += f'resource "google_compute_interconnect_attachment" "{tf_name}" {{\n'
+            hcl += f'  name    = "{name}"\n'
+            hcl += f'  project = "{self.project_id}"\n'
+            hcl += f'  region  = "{attachment.get("region", "").split("/")[-1]}"\n'
+            
+            if attachment.get('router'):
+                router_name = attachment['router'].split('/')[-1]
+                hcl += f'  router = "{router_name}"\n'
+            
+            if attachment.get('interconnect'):
+                interconnect_name = attachment['interconnect'].split('/')[-1]
+                hcl += f'  interconnect = google_compute_interconnect.{self.sanitize_name(interconnect_name)}.self_link\n'
+            
+            if attachment.get('vlanTag8021q'):
+                hcl += f'  vlan_tag8021q = {attachment["vlanTag8021q"]}\n'
+            
+            hcl += '}\n\n'
+        
+        return hcl
+    
     def generate_provider_tf(self) -> str:
         """Gera arquivo provider.tf"""
         return f'''terraform {{
@@ -1258,6 +2204,101 @@ variable "zone" {{
                 f.write(self.generate_negs_tf())
             print("   ✓ negs.tf")
         
+        # Cloud Armor (FASE 2)
+        if self.resources.get('security_policies'):
+            with open(output_path / "cloud_armor.tf", "w") as f:
+                f.write(self.generate_cloud_armor_tf())
+            print("   ✓ cloud_armor.tf")
+        
+        # IAM Custom Roles (FASE 2)
+        if self.resources.get('custom_roles'):
+            with open(output_path / "custom_roles.tf", "w") as f:
+                f.write(self.generate_custom_roles_tf())
+            print("   ✓ custom_roles.tf")
+        
+        # Health Checks (FASE 2)
+        if self.resources.get('health_checks'):
+            with open(output_path / "health_checks.tf", "w") as f:
+                f.write(self.generate_health_checks_tf())
+            print("   ✓ health_checks.tf")
+        
+        # SSL Certificates (FASE 2)
+        if self.resources.get('ssl_certificates'):
+            with open(output_path / "ssl_certificates.tf", "w") as f:
+                f.write(self.generate_ssl_certificates_tf())
+            print("   ✓ ssl_certificates.tf")
+        
+        # Compute Images (FASE 2)
+        if self.resources.get('compute_images'):
+            with open(output_path / "images.tf", "w") as f:
+                f.write(self.generate_compute_images_tf())
+            print("   ✓ images.tf")
+        
+        # Pub/Sub Subscriptions e Schemas (FASE 3)
+        if self.resources.get('pubsub_subscriptions') or self.resources.get('pubsub_schemas'):
+            with open(output_path / "pubsub.tf", "w") as f:
+                f.write(self.generate_pubsub_subscriptions_tf())
+            print("   ✓ pubsub.tf")
+        
+        # GKE Node Pools (FASE 3)
+        if self.resources.get('gke_node_pools'):
+            with open(output_path / "gke_node_pools.tf", "w") as f:
+                f.write(self.generate_gke_node_pools_tf())
+            print("   ✓ gke_node_pools.tf")
+        
+        # BigQuery Tables (FASE 3)
+        if self.resources.get('bigquery_tables'):
+            with open(output_path / "bigquery_tables.tf", "w") as f:
+                f.write(self.generate_bigquery_tables_tf())
+            print("   ✓ bigquery_tables.tf")
+        
+        # Monitoring Dashboards e Alerting Policies (FASE 3)
+        if self.resources.get('monitoring_dashboards') or self.resources.get('alerting_policies'):
+            with open(output_path / "monitoring.tf", "w") as f:
+                content = ""
+                if self.resources.get('monitoring_dashboards'):
+                    content += self.generate_monitoring_dashboards_tf()
+                if self.resources.get('alerting_policies'):
+                    content += self.generate_alerting_policies_tf()
+                f.write(content)
+            print("   ✓ monitoring.tf")
+        
+        # Cloud Interconnect (FASE 3)
+        if self.resources.get('interconnects') or self.resources.get('interconnect_attachments'):
+            with open(output_path / "interconnect.tf", "w") as f:
+                f.write(self.generate_interconnect_tf())
+            print("   ✓ interconnect.tf")
+        
+        # Cloud Spanner (FASE 3)
+        if self.resources.get('spanner_instances'):
+            with open(output_path / "spanner.tf", "w") as f:
+                f.write(self.generate_spanner_tf())
+            print("   ✓ spanner.tf")
+        
+        # Filestore (FASE 3)
+        if self.resources.get('filestore_instances'):
+            with open(output_path / "filestore.tf", "w") as f:
+                f.write(self.generate_filestore_tf())
+            print("   ✓ filestore.tf")
+        
+        # Dataproc (FASE 3)
+        if self.resources.get('dataproc_clusters'):
+            with open(output_path / "dataproc.tf", "w") as f:
+                f.write(self.generate_dataproc_tf())
+            print("   ✓ dataproc.tf")
+        
+        # Autoscalers (FASE 4)
+        if self.resources.get('autoscalers'):
+            with open(output_path / "autoscalers.tf", "w") as f:
+                f.write(self.generate_autoscalers_tf())
+            print("   ✓ autoscalers.tf")
+        
+        # Bigtable (FASE 4)
+        if self.resources.get('bigtable_instances'):
+            with open(output_path / "bigtable.tf", "w") as f:
+                f.write(self.generate_bigtable_tf())
+            print("   ✓ bigtable.tf")
+        
         # README
         readme = f"""# Terraform - {self.project_id}
 
@@ -1286,24 +2327,52 @@ terraform plan
 - **Cloud Routers**: {len(self.resources.get('routers', []))} router(s)
 - **Cloud NAT**: {len(self.resources.get('cloud_nats', []))} NAT(s) ⭐ FASE 1
 - **Network Endpoint Groups**: {len(self.resources.get('network_endpoint_groups', []))} NEG(s) ⭐ FASE 1
+- **Health Checks**: {len(self.resources.get('health_checks', []))} health check(s) ⭐ FASE 2
+- **SSL Certificates**: {len(self.resources.get('ssl_certificates', []))} certificado(s) ⭐ FASE 2
 - **VPN Gateways**: {len(self.resources.get('vpn_gateways', []))} gateway(s)
 - **VPN Tunnels**: {len(self.resources.get('vpn_tunnels', []))} tunnel(s)
 - **VPC Peering**: {len(self.resources.get('peerings', []))} conexão(ões)
+- **Cloud Interconnect**: {len(self.resources.get('interconnects', []))} interconnect(s) 🚀 FASE 3
+- **Interconnect Attachments**: {len(self.resources.get('interconnect_attachments', []))} attachment(s) 🚀 FASE 3
 
 ### 💻 Compute & Storage
 - **Compute Instances**: {len(self.resources.get('instances', []))} VM(s)
 - **Instance Templates**: {len(self.resources.get('instance_templates', []))} template(s) ⭐ FASE 1
 - **Managed Instance Groups**: {len(self.resources.get('managed_instance_groups', []))} MIG(s) ⭐ FASE 1
+- **Autoscalers**: {len(self.resources.get('autoscalers', []))} autoscaler(s) 🎯 FASE 4
 - **Compute Disks**: {len(self.resources.get('compute_disks', []))} disco(s) ⭐ FASE 1
 - **Compute Snapshots**: {len(self.resources.get('compute_snapshots', []))} snapshot(s) ⭐ FASE 1
+- **Compute Images**: {len(self.resources.get('compute_images', []))} imagem(ns) ⭐ FASE 2
 - **Storage Buckets**: {len(self.resources.get('buckets', []))} bucket(s)
+- **Filestore Instances**: {len(self.resources.get('filestore_instances', []))} instance(s) 🚀 FASE 3
 - **Cloud Functions**: {len(self.resources.get('functions', []))} function(s)
+
+### 🔧 Containers & Orchestration
 - **GKE Clusters**: {len(self.resources.get('gke_clusters', []))} cluster(s)
+- **GKE Node Pools**: {len(self.resources.get('gke_node_pools', []))} node pool(s) 🚀 FASE 3
+
+### 📊 Data & Analytics
 - **Cloud SQL**: {len(self.resources.get('sql_instances', []))} instância(s)
+- **BigQuery Tables**: {len(self.resources.get('bigquery_tables', []))} tabela(s) 🚀 FASE 3
+- **Cloud Spanner**: {len(self.resources.get('spanner_instances', []))} instance(s) 🚀 FASE 3
+- **Cloud Bigtable**: {len(self.resources.get('bigtable_instances', []))} instance(s) 🎯 FASE 4
+- **Dataproc Clusters**: {len(self.resources.get('dataproc_clusters', []))} cluster(s) 🚀 FASE 3
+
+### 📨 Messaging
+- **Pub/Sub Topics**: {len(self.resources.get('pubsub_topics', []))} topic(s)
+- **Pub/Sub Subscriptions**: {len(self.resources.get('pubsub_subscriptions', []))} subscription(s) 🚀 FASE 3
+- **Pub/Sub Schemas**: {len(self.resources.get('pubsub_schemas', []))} schema(s) 🚀 FASE 3
+
+### 📈 Monitoring & Logging
+- **Monitoring Dashboards**: {len(self.resources.get('monitoring_dashboards', []))} dashboard(s) 🚀 FASE 3
+- **Alerting Policies**: {len(self.resources.get('alerting_policies', []))} policy(ies) 🚀 FASE 3
 
 ### 🔐 Security & IAM
 - **Service Accounts**: {len(self.resources.get('service_accounts', []))} SA(s)
+- **Service Account Keys**: {len(self.resources.get('sa_keys', []))} chave(s) ⭐ FASE 2
 - **IAM Policy Bindings**: {len(self.resources.get('iam_policy', {}).get('bindings', []))} binding(s) ⭐ FASE 1
+- **IAM Custom Roles**: {len(self.resources.get('custom_roles', []))} role(s) ⭐ FASE 2
+- **Cloud Armor Policies**: {len(self.resources.get('security_policies', []))} policy(ies) ⭐ FASE 2
 
 ## 🔍 Recursos Importantes para Análise de Rede
 
