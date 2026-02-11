@@ -241,6 +241,88 @@ class GCPToTerraform:
         self.resources['dataflow_jobs'] = jobs
         print(f"   ✓ {len(jobs)} jobs encontrados")
     
+    def extract_iam_policies(self):
+        """Extrai IAM Policies do projeto"""
+        print("🔐 Extraindo IAM Policies...")
+        try:
+            # Obter IAM policy do projeto
+            policy = self.run_gcloud(f"projects get-iam-policy {self.project_id}")
+            self.resources['iam_policy'] = policy
+            
+            # Contar bindings
+            bindings_count = len(policy.get('bindings', [])) if isinstance(policy, dict) else 0
+            print(f"   ✓ {bindings_count} role bindings encontrados")
+        except Exception as e:
+            print(f"   ⚠️  Erro ao extrair IAM policy: {e}")
+            self.resources['iam_policy'] = {}
+    
+    def extract_instance_groups(self):
+        """Extrai Managed Instance Groups e Instance Templates"""
+        print("🖥️  Extraindo Instance Groups e Templates...")
+        
+        # Instance Templates
+        templates = self.run_gcloud("compute instance-templates list")
+        self.resources['instance_templates'] = templates
+        print(f"   ✓ {len(templates)} instance templates encontrados")
+        
+        # Managed Instance Groups (regionais e zonais)
+        migs = self.run_gcloud("compute instance-groups managed list")
+        self.resources['managed_instance_groups'] = migs
+        print(f"   ✓ {len(migs)} managed instance groups encontrados")
+        
+        # Unmanaged Instance Groups
+        uigs = self.run_gcloud("compute instance-groups unmanaged list")
+        self.resources['unmanaged_instance_groups'] = uigs
+        print(f"   ✓ {len(uigs)} unmanaged instance groups encontrados")
+    
+    def extract_cloud_nat(self):
+        """Extrai Cloud NAT configurations"""
+        print("🌐 Extraindo Cloud NAT...")
+        
+        # Cloud NAT é configurado por router e região
+        all_nats = []
+        routers = self.resources.get('routers', [])
+        
+        for router in routers:
+            router_name = router.get('name', '')
+            region = router.get('region', '').split('/')[-1] if router.get('region') else ''
+            
+            if router_name and region:
+                try:
+                    nats = self.run_gcloud(f"compute routers nats list --router={router_name} --region={region}")
+                    for nat in nats:
+                        nat['router_name'] = router_name
+                        nat['region'] = region
+                        all_nats.append(nat)
+                except:
+                    pass
+        
+        self.resources['cloud_nats'] = all_nats
+        print(f"   ✓ {len(all_nats)} Cloud NAT encontrados")
+    
+    def extract_disks(self):
+        """Extrai Compute Disks persistentes"""
+        print("💾 Extraindo Compute Disks...")
+        
+        # Disks
+        disks = self.run_gcloud("compute disks list")
+        self.resources['compute_disks'] = disks
+        print(f"   ✓ {len(disks)} discos encontrados")
+        
+        # Snapshots
+        snapshots = self.run_gcloud("compute snapshots list")
+        self.resources['compute_snapshots'] = snapshots
+        print(f"   ✓ {len(snapshots)} snapshots encontrados")
+    
+    def extract_network_endpoint_groups(self):
+        """Extrai Network Endpoint Groups (NEGs)"""
+        print("🎯 Extraindo Network Endpoint Groups...")
+        
+        # NEGs podem ser zonais ou regionais
+        negs = self.run_gcloud("compute network-endpoint-groups list")
+        self.resources['network_endpoint_groups'] = negs
+        print(f"   ✓ {len(negs)} NEGs encontrados")
+    
     def extract_bigquery_extended(self):
         """Extrai BigQuery de forma mais completa"""
         print("📊 Extraindo BigQuery (estendido)...")
@@ -275,6 +357,8 @@ class GCPToTerraform:
         
         # Compute e Storage
         self.extract_compute()
+        self.extract_instance_groups()  # FASE 1: MIGs
+        self.extract_disks()  # FASE 1: Disks
         self.extract_storage()
         
         # Serverless
@@ -295,12 +379,15 @@ class GCPToTerraform:
         
         # Security e IAM
         self.extract_service_accounts()
+        self.extract_iam_policies()  # FASE 1: IAM Policies
         self.extract_secrets()
         self.extract_kms()
         
         # Networking avançado
         self.extract_dns()
         self.extract_load_balancers()
+        self.extract_network_endpoint_groups()  # FASE 1: NEGs
+        self.extract_cloud_nat()  # FASE 1: Cloud NAT
         
         # CI/CD e Artifacts
         self.extract_artifact_registry()
@@ -748,6 +835,282 @@ class GCPToTerraform:
         
         return hcl
     
+    def generate_iam_policies_tf(self) -> str:
+        """Gera HCL para IAM Policies do projeto"""
+        hcl = "# IAM Policy Bindings\n\n"
+        
+        policy = self.resources.get('iam_policy', {})
+        bindings = policy.get('bindings', [])
+        
+        for idx, binding in enumerate(bindings):
+            role = binding.get('role', '')
+            members = binding.get('members', [])
+            
+            if role and members:
+                # Sanitizar role para nome do recurso
+                role_name = role.replace('roles/', '').replace('.', '_').replace('/', '_')
+                tf_name = f"{role_name}_{idx}"
+                
+                hcl += f'resource "google_project_iam_binding" "{tf_name}" {{\n'
+                hcl += f'  project = "{self.project_id}"\n'
+                hcl += f'  role    = "{role}"\n\n'
+                hcl += '  members = [\n'
+                for member in members:
+                    hcl += f'    "{member}",\n'
+                hcl += '  ]\n'
+                
+                # Adicionar condition se existir
+                if binding.get('condition'):
+                    condition = binding['condition']
+                    hcl += '\n  condition {\n'
+                    hcl += f'    title       = "{condition.get("title", "")}"\n'
+                    hcl += f'    description = "{condition.get("description", "")}"\n'
+                    hcl += f'    expression  = "{condition.get("expression", "")}"\n'
+                    hcl += '  }\n'
+                
+                hcl += '}\n\n'
+        
+        return hcl
+    
+    def generate_instance_groups_tf(self) -> str:
+        """Gera HCL para Instance Templates e Managed Instance Groups"""
+        hcl = "# Instance Templates\n\n"
+        
+        # Instance Templates
+        for template in self.resources.get('instance_templates', []):
+            name = template.get('name', '')
+            tf_name = self.sanitize_name(name)
+            properties = template.get('properties', {})
+            
+            hcl += f'resource "google_compute_instance_template" "{tf_name}" {{\n'
+            hcl += f'  name         = "{name}"\n'
+            hcl += f'  project      = "{self.project_id}"\n'
+            
+            if template.get('description'):
+                hcl += f'  description  = "{template["description"]}"\n'
+            
+            # Machine type
+            machine_type = properties.get('machineType', 'n1-standard-1')
+            hcl += f'  machine_type = "{machine_type}"\n'
+            
+            # Disks
+            if properties.get('disks'):
+                for disk in properties['disks']:
+                    hcl += '\n  disk {\n'
+                    if disk.get('boot'):
+                        hcl += '    boot         = true\n'
+                    if disk.get('autoDelete'):
+                        hcl += '    auto_delete  = true\n'
+                    if disk.get('initializeParams'):
+                        params = disk['initializeParams']
+                        hcl += '    source_image = "{}"\n'.format(params.get('sourceImage', 'debian-cloud/debian-11'))
+                        if params.get('diskSizeGb'):
+                            hcl += f'    disk_size_gb = {params["diskSizeGb"]}\n'
+                        if params.get('diskType'):
+                            hcl += f'    disk_type    = "{params["diskType"]}"\n'
+                    hcl += '  }\n'
+            
+            # Network interfaces
+            if properties.get('networkInterfaces'):
+                for iface in properties['networkInterfaces']:
+                    hcl += '\n  network_interface {\n'
+                    if iface.get('network'):
+                        network_name = iface['network'].split('/')[-1]
+                        hcl += f'    network = "{network_name}"\n'
+                    if iface.get('subnetwork'):
+                        subnet_name = iface['subnetwork'].split('/')[-1]
+                        hcl += f'    subnetwork = "{subnet_name}"\n'
+                    hcl += '  }\n'
+            
+            # Tags
+            if properties.get('tags', {}).get('items'):
+                hcl += '\n  tags = [\n'
+                for tag in properties['tags']['items']:
+                    hcl += f'    "{tag}",\n'
+                hcl += '  ]\n'
+            
+            hcl += '}\n\n'
+        
+        # Managed Instance Groups
+        hcl += "# Managed Instance Groups\n\n"
+        for mig in self.resources.get('managed_instance_groups', []):
+            name = mig.get('name', '')
+            tf_name = self.sanitize_name(name)
+            
+            # Verificar se é regional ou zonal
+            is_regional = 'region' in mig
+            
+            if is_regional:
+                hcl += f'resource "google_compute_region_instance_group_manager" "{tf_name}" {{\n'
+                hcl += f'  name   = "{name}"\n'
+                hcl += f'  region = "{mig.get("region", "").split("/")[-1]}"\n'
+            else:
+                hcl += f'resource "google_compute_instance_group_manager" "{tf_name}" {{\n'
+                hcl += f'  name = "{name}"\n'
+                hcl += f'  zone = "{mig.get("zone", "").split("/")[-1]}"\n'
+            
+            hcl += f'  project = "{self.project_id}"\n'
+            
+            # Instance template
+            if mig.get('instanceTemplate'):
+                template_name = mig['instanceTemplate'].split('/')[-1]
+                hcl += f'\n  version {{\n'
+                hcl += f'    instance_template = google_compute_instance_template.{self.sanitize_name(template_name)}.id\n'
+                hcl += '  }\n'
+            
+            # Target size
+            if mig.get('targetSize'):
+                hcl += f'\n  target_size = {mig["targetSize"]}\n'
+            
+            # Base instance name
+            if mig.get('baseInstanceName'):
+                hcl += f'  base_instance_name = "{mig["baseInstanceName"]}"\n'
+            
+            hcl += '}\n\n'
+        
+        return hcl
+    
+    def generate_cloud_nat_tf(self) -> str:
+        """Gera HCL para Cloud NAT"""
+        hcl = "# Cloud NAT\n\n"
+        
+        for nat in self.resources.get('cloud_nats', []):
+            name = nat.get('name', '')
+            router_name = nat.get('router_name', '')
+            region = nat.get('region', '')
+            tf_name = self.sanitize_name(f"{router_name}_{name}")
+            
+            hcl += f'resource "google_compute_router_nat" "{tf_name}" {{\n'
+            hcl += f'  name   = "{name}"\n'
+            hcl += f'  router = google_compute_router.{self.sanitize_name(router_name)}.name\n'
+            hcl += f'  region = "{region}"\n'
+            hcl += f'  project = "{self.project_id}"\n'
+            
+            # NAT IP allocate option
+            if nat.get('natIpAllocateOption'):
+                hcl += f'  nat_ip_allocate_option = "{nat["natIpAllocateOption"]}"\n'
+            
+            # Source subnetwork IP ranges
+            if nat.get('sourceSubnetworkIpRangesToNat'):
+                hcl += f'  source_subnetwork_ip_ranges_to_nat = "{nat["sourceSubnetworkIpRangesToNat"]}"\n'
+            
+            # Subnetworks (se especificado)
+            if nat.get('subnetworks'):
+                for subnet in nat['subnetworks']:
+                    hcl += '\n  subnetwork {\n'
+                    if subnet.get('name'):
+                        subnet_name = subnet['name'].split('/')[-1]
+                        hcl += f'    name = "{subnet_name}"\n'
+                    if subnet.get('sourceIpRangesToNat'):
+                        hcl += f'    source_ip_ranges_to_nat = {json.dumps(subnet["sourceIpRangesToNat"])}\n'
+                    hcl += '  }\n'
+            
+            # Min ports per VM
+            if nat.get('minPortsPerVm'):
+                hcl += f'  min_ports_per_vm = {nat["minPortsPerVm"]}\n'
+            
+            # Log config
+            if nat.get('logConfig'):
+                log_config = nat['logConfig']
+                hcl += '\n  log_config {\n'
+                hcl += f'    enable = {str(log_config.get("enable", False)).lower()}\n'
+                hcl += f'    filter = "{log_config.get("filter", "ALL")}"\n'
+                hcl += '  }\n'
+            
+            hcl += '}\n\n'
+        
+        return hcl
+    
+    def generate_disks_tf(self) -> str:
+        """Gera HCL para Compute Disks"""
+        hcl = "# Compute Persistent Disks\n\n"
+        
+        for disk in self.resources.get('compute_disks', []):
+            name = disk.get('name', '')
+            tf_name = self.sanitize_name(name)
+            
+            hcl += f'resource "google_compute_disk" "{tf_name}" {{\n'
+            hcl += f'  name    = "{name}"\n'
+            hcl += f'  project = "{self.project_id}"\n'
+            hcl += f'  zone    = "{disk.get("zone", "").split("/")[-1]}"\n'
+            
+            # Type
+            if disk.get('type'):
+                disk_type = disk['type'].split('/')[-1]
+                hcl += f'  type    = "{disk_type}"\n'
+            
+            # Size
+            if disk.get('sizeGb'):
+                hcl += f'  size    = {disk["sizeGb"]}\n'
+            
+            # Description
+            if disk.get('description'):
+                hcl += f'  description = "{disk["description"]}"\n'
+            
+            # Labels
+            if disk.get('labels'):
+                hcl += '\n  labels = {\n'
+                for key, value in disk['labels'].items():
+                    hcl += f'    {key} = "{value}"\n'
+                hcl += '  }\n'
+            
+            # Physical block size
+            if disk.get('physicalBlockSizeBytes'):
+                hcl += f'  physical_block_size_bytes = {disk["physicalBlockSizeBytes"]}\n'
+            
+            hcl += '}\n\n'
+        
+        return hcl
+    
+    def generate_negs_tf(self) -> str:
+        """Gera HCL para Network Endpoint Groups"""
+        hcl = "# Network Endpoint Groups (NEGs)\n\n"
+        
+        for neg in self.resources.get('network_endpoint_groups', []):
+            name = neg.get('name', '')
+            tf_name = self.sanitize_name(name)
+            
+            # Verificar tipo de NEG (zonal, regional, serverless, etc)
+            neg_type = neg.get('networkEndpointType', 'GCE_VM_IP_PORT')
+            
+            if 'region' in neg:
+                # NEG Regional
+                hcl += f'resource "google_compute_region_network_endpoint_group" "{tf_name}" {{\n'
+                hcl += f'  name   = "{name}"\n'
+                hcl += f'  region = "{neg.get("region", "").split("/")[-1]}"\n'
+            else:
+                # NEG Zonal
+                hcl += f'resource "google_compute_network_endpoint_group" "{tf_name}" {{\n'
+                hcl += f'  name = "{name}"\n'
+                hcl += f'  zone = "{neg.get("zone", "").split("/")[-1]}"\n'
+            
+            hcl += f'  project = "{self.project_id}"\n'
+            
+            # Network
+            if neg.get('network'):
+                network_name = neg['network'].split('/')[-1]
+                hcl += f'  network = "{network_name}"\n'
+            
+            # Subnetwork
+            if neg.get('subnetwork'):
+                subnet_name = neg['subnetwork'].split('/')[-1]
+                hcl += f'  subnetwork = "{subnet_name}"\n'
+            
+            # Network endpoint type
+            hcl += f'  network_endpoint_type = "{neg_type}"\n'
+            
+            # Default port
+            if neg.get('defaultPort'):
+                hcl += f'  default_port = {neg["defaultPort"]}\n'
+            
+            # Description
+            if neg.get('description'):
+                hcl += f'  description = "{neg["description"]}"\n'
+            
+            hcl += '}\n\n'
+        
+        return hcl
+    
     def generate_provider_tf(self) -> str:
         """Gera arquivo provider.tf"""
         return f'''terraform {{
@@ -865,6 +1228,36 @@ variable "zone" {{
                 f.write(self.generate_service_accounts_tf())
             print("   ✓ iam.tf")
         
+        # IAM Policies (FASE 1)
+        if self.resources.get('iam_policy', {}).get('bindings'):
+            with open(output_path / "iam_policies.tf", "w") as f:
+                f.write(self.generate_iam_policies_tf())
+            print("   ✓ iam_policies.tf")
+        
+        # Instance Groups e Templates (FASE 1)
+        if self.resources.get('instance_templates') or self.resources.get('managed_instance_groups'):
+            with open(output_path / "instance_groups.tf", "w") as f:
+                f.write(self.generate_instance_groups_tf())
+            print("   ✓ instance_groups.tf")
+        
+        # Cloud NAT (FASE 1)
+        if self.resources.get('cloud_nats'):
+            with open(output_path / "cloud_nat.tf", "w") as f:
+                f.write(self.generate_cloud_nat_tf())
+            print("   ✓ cloud_nat.tf")
+        
+        # Compute Disks (FASE 1)
+        if self.resources.get('compute_disks'):
+            with open(output_path / "disks.tf", "w") as f:
+                f.write(self.generate_disks_tf())
+            print("   ✓ disks.tf")
+        
+        # Network Endpoint Groups (FASE 1)
+        if self.resources.get('network_endpoint_groups'):
+            with open(output_path / "negs.tf", "w") as f:
+                f.write(self.generate_negs_tf())
+            print("   ✓ negs.tf")
+        
         # README
         readme = f"""# Terraform - {self.project_id}
 
@@ -891,18 +1284,26 @@ terraform plan
 - **Firewall Rules**: {len(self.resources.get('firewalls', []))} regra(s)
 - **Routes**: {len(self.resources.get('routes', []))} rota(s) personalizada(s)
 - **Cloud Routers**: {len(self.resources.get('routers', []))} router(s)
+- **Cloud NAT**: {len(self.resources.get('cloud_nats', []))} NAT(s) ⭐ FASE 1
+- **Network Endpoint Groups**: {len(self.resources.get('network_endpoint_groups', []))} NEG(s) ⭐ FASE 1
 - **VPN Gateways**: {len(self.resources.get('vpn_gateways', []))} gateway(s)
 - **VPN Tunnels**: {len(self.resources.get('vpn_tunnels', []))} tunnel(s)
 - **VPC Peering**: {len(self.resources.get('peerings', []))} conexão(ões)
 
-### 💾 Compute & Storage
+### 💻 Compute & Storage
+- **Compute Instances**: {len(self.resources.get('instances', []))} VM(s)
+- **Instance Templates**: {len(self.resources.get('instance_templates', []))} template(s) ⭐ FASE 1
+- **Managed Instance Groups**: {len(self.resources.get('managed_instance_groups', []))} MIG(s) ⭐ FASE 1
+- **Compute Disks**: {len(self.resources.get('compute_disks', []))} disco(s) ⭐ FASE 1
+- **Compute Snapshots**: {len(self.resources.get('compute_snapshots', []))} snapshot(s) ⭐ FASE 1
 - **Storage Buckets**: {len(self.resources.get('buckets', []))} bucket(s)
 - **Cloud Functions**: {len(self.resources.get('functions', []))} function(s)
 - **GKE Clusters**: {len(self.resources.get('gke_clusters', []))} cluster(s)
 - **Cloud SQL**: {len(self.resources.get('sql_instances', []))} instância(s)
 
-### 🔐 IAM
+### 🔐 Security & IAM
 - **Service Accounts**: {len(self.resources.get('service_accounts', []))} SA(s)
+- **IAM Policy Bindings**: {len(self.resources.get('iam_policy', {}).get('bindings', []))} binding(s) ⭐ FASE 1
 
 ## 🔍 Recursos Importantes para Análise de Rede
 

@@ -136,7 +136,8 @@ class GCPOrgToTerraform:
         print("🔐 Extraindo IAM Policies da Organização...")
         try:
             iam_policy = self.run_gcloud(
-                f"organizations get-iam-policy {self.org_id}"
+                f"organizations get-iam-policy {self.org_id}",
+                use_org=False
             )
             self.resources['org_iam_policy'] = iam_policy
             
@@ -159,7 +160,8 @@ class GCPOrgToTerraform:
         try:
             # Tag Keys
             tag_keys = self.run_gcloud(
-                f"resource-manager tags keys list --parent=organizations/{self.org_id}"
+                f"resource-manager tags keys list --parent=organizations/{self.org_id}",
+                use_org=False
             )
             self.resources['tag_keys'] = tag_keys
             print(f"   ✓ {len(tag_keys)} tag keys encontradas")
